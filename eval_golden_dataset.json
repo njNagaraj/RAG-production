@@ -1,0 +1,32 @@
+[
+  {
+    "id": 1,
+    "question": "What is the annual lodging budget for L3 employees?",
+    "target_source": "travel_policy.md",
+    "expected_keywords": ["$2,000", "lodging"]
+  },
+  {
+    "id": 2,
+    "question": "Explain the maternity leave benefits.",
+    "target_source": "hr_handbook.md",
+    "expected_keywords": ["weeks", "maternity", "leave"]
+  },
+  {
+    "id": 3,
+    "question": "Who is eligible for wellness allowances?",
+    "target_source": "benefits_guide.md",
+    "expected_keywords": ["wellness", "allowance", "eligible"]
+  },
+  {
+    "id": 4,
+    "question": "What is the notice period after confirmation? And how long is probation?",
+    "target_source": "hr_handbook.md",
+    "expected_keywords": ["60 days", "90"]
+  },
+  {
+    "id": 5,
+    "question": "What is the reimbursement invoice format, for example INV-2026-042?",
+    "target_source": "travel_policy.md",
+    "expected_keywords": ["INV", "30 days"]
+  }
+]

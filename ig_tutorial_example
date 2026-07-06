@@ -1,0 +1,241 @@
+Fixed Size Chunking: This is the simplest and most commonly used approach.
+In fixed-size chunking, the document is split into chunks containing a fixed number of tokens or characters.
+Each chunk is stored separately in the vector database.
+Easy to implement, Fast preprocessing, Works well for quick prototypes but
+Sentences or paragraphs may get cut in the middle
+Important context can be lost across chunks
+
+Sentence or Paragraph Chunking: Instead of splitting by token length, this strategy splits text using natural language boundaries -
+Periods, Commas, Question marks, Paragraph breaks.
+This approach keeps complete ideas together, making it easier for the LLM to understand the context.
+Best for - Articles, Blogs, FAQs, Documentation but
+Paragraphs can sometimes become too long or inconsistent, which can affect retrieval.
+
+Recursive Chunking: It attempts to preserve document structure.
+Instead of splitting everything the same way, it tries multiple levels.
+The algorithm starts with large blocks and keeps splitting until the chunk fits the desired token size.
+Maintains document structure, Produces more meaningful chunks
+
+Semantic Chunking:
+It is considered one of the most intelligent chunking strategies.
+Its covered in the video, and advantages are Higher retrieval accuracy, Better contextual understanding. But
+More computationally expensive, Requires additional embedding calculations
+
+Page-Level Chunking: In some documents, each page already represents a logical unit of information. Like in Resumes, Invoices, Research reports, financial statements.
+In such cases, each page becomes a chunk.
+This approach preserves document structure and layout.
+However, it may fail if important information spans multiple pages.
+
+Code-Aware Chunking:
+When building RAG systems for software documentation or codebases, traditional text chunking does not work well.
+Instead, chunking should follow programming structures such as: Functions, Classes, Modules, Scopes.
+Each logical unit becomes a separate chunk.
+This significantly improves retrieval accuracy for developer tools.
+
+(Continued in comment)
+13w
+(Continuation of caption)
+Hybrid or Agentic Chunking:
+Based on how it’s implemented, this approach is often referred to as agentic or LLM-based, or simply adaptive chunking.
+In this strategy, an intelligent agent dynamically decides which chunking strategy to apply based on the document type.
+The system combines multiple chunking pipelines into one adaptive architecture.
+This approach is commonly used in production-scale AI systems.
+
+Remember:
+There is no universal best chunking strategy.
+The right approach depends on:
+Document structure, Document length,
+Type of content, Retrieval requirements
+
+For example:
+Blogs - Sentence chunking
+Research papers - Semantic chunking
+Codebases - Code-aware chunking
+Reports - Page-level chunking
+
+The best solution is to experiment with multiple strategies and evaluate retrieval quality.
+
+
+Let the user ask literally anything, the system should be designed to handle all kinds of queries smoothly.
+
+We already talked about few query types and how each one can be transformed differently based on its nature.
+
+IMPLEMENTATION:
+Whenever a user asks something, pass it through an LLM that transforms the query. Design the prompt in a way that it adapts the transformation technique depending on the query type (just like we discussed in the video). Then send those improved query/queries to the retriever so it pulls more relevant chunks, which ultimately leads to a better final answer.
+
+
+Metadata is data about your data.
+These extra details attached to each chunk in your RAG system, provide the context needed for LLM to know what exactly to look for.
+If you want to implement this, you need to choose vector stores that support this, like - @weaviate.io • postgreSQL • qdrant • pinecone
+
+If you want to visualise how reranking actually works…
+
+I can share a simple 5-line CODE using Cohere’s API.
+And also a full RAG + reranking example, so you can see exactly where it fits in your pipeline.
+
+This is Ep5 of advanced RAG concepts explained in the simplest way possible.
+Each episode helps you learn one concept that can genuinely level up your basic chatbot.
+Today’s episode is on Hybrid Search.
+@perplexity @swiggyindia @spotify all use Hybrid Search in their design
+
+This is Episode 8 on Advanced RAG concepts.
+Each episode is single concept that can genuinely level up your basic chatbot.
+Todays concept is GENERATION in RAG
+
+[citations in AI, reduce hallucinations, prompting, RAG, production practices]
+
+This is episode 9 of learning advanced RAG concepts in the simplest way possible. Each episode is one concept that can genuinely level up your basic chatbot.
+Today’s episode is on the DATA PIPELINE TOOL
+
+AI observability isnt optional. Shipping AI systems without observability means operating blind. Without visibility, you cant identify why costs increased, where latency issues originated, or which step caused incorrect outputs. Robust observability helps teams debug faster, reduce wasted time and resources, and build more reliable AI systems.
+
+WHAT DID WE COVER:
+How to evaluate your RAG Pipeline?
+Which metrics are to be checked?
+What does each metric specify?
+What to do when each metric is not satisfactory?
+
+Memory Layer in RAG
+
+This is your stepwise framework on how to choose a vector db properly.
+I have tried summarising this article from pinecone in the simplest possible way - https://www.pinecone.io/learn/an-opinionated-checklist-to-choose-a-vector-database/
+
+[Ep. 15/15] Failure Handling in RAG applications
+
+his is episode 7 of learning advanced RAG concepts in the simplest way possible. Each episode is a single concept can genuinely level up your basic chatbot.
+And today’s concept is SEMANTIC CACHING
+
+1: Don't treat every PDF the same
+
+A common mistake is extracting everything as plain text.
+
+But PDFs can contain:
+
+📄 Text documents
+
+📊 Tables
+
+📈 Charts
+
+🖼️ Scanned images
+
+Each requires a different extraction strategy.
+
+Step 2: Parse documents intelligently
+
+For text:
+
+Extract structured text
+Preserve headings and sections
+
+For tables:
+
+Extract rows and columns separately
+Maintain relationships between cells
+
+For scanned PDFs:
+
+Apply OCR
+
+For charts:
+
+Use multimodal models to generate chart descriptions
+
+Example:
+
+Instead of storing:
+
+"Revenue chart"
+
+Store:
+
+"Revenue increased from $2M in 2022 to $5M in 2024."
+
+Now the LLM can reason over it.
+
+Step 3: Create semantic chunks
+
+❌ Bad chunking
+
+Split every 500 characters.
+
+✅ Good chunking
+
+Chunk by:
+
+Headings
+Sections
+Table boundaries
+Semantic meaning
+
+This dramatically improves retrieval quality.
+
+Step 4: Generate embeddings
+
+Convert chunks into vectors and store them in a vector database.
+
+Examples:
+
+Pinecone
+Weaviate
+Milvus
+
+Now similar questions can retrieve similar content.
+
+Step 5: Hybrid Retrieval
+
+Don't rely only on vector search.
+
+Use:
+
+🔹 Keyword Search (BM25)
+
+🔹 Vector Search
+
+🔹 Metadata Filtering
+
+This helps when users search for:
+
+Invoice numbers
+Product IDs
+Exact dates
+Names
+Step 6: Add Reranking
+
+Retriever ≠ Best Result
+
+Retrieve Top 20
+
+Rerank Top 20
+
+Send Top 5 to the LLM
+
+This often improves answer quality more than switching to a larger model.
+
+Step 7: Use a Multimodal RAG Pipeline
+
+Since PDFs contain charts and images:
+
+Store:
+
+Text + Tables + OCR + Image Descriptions
+
+Not just text.
+
+This is where most RAG systems fail.
+
+Step 8: Add Citations
+
+Every answer should include:
+
+. Source PDF
+
+. Page Number
+
+.Retrieved Chunk
+
+Users trust answers they can verify.
+
+Interview Answer (short and to the point)
+
+"I would build a multimodal RAG pipeline that separately processes text, tables, charts, and scanned images using OCR and vision models. I'd create semantic chunks, generate embeddings, use hybrid retrieval with reranking, and provide source citations for every answer to maximize accuracy and trust."

@@ -1,0 +1,597 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Production RAG Assistant</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Sidebar for document ingestion -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <div class="logo">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M12 2L2 7L12 12L22 7L12 2Z" stroke="#a78bfa" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        <path d="M2 17L12 22L22 17" stroke="#a78bfa" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        <path d="M2 12L12 17L22 12" stroke="#a78bfa" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                    <span>RAG Assistant</span>
+                </div>
+                <div class="status-indicator">
+                    <span class="pulse"></span>
+                    <span>Database Connected</span>
+                </div>
+                <div class="status-indicator" id="user-badge" style="display:none; cursor:pointer;"
+                     title="Click to change API key">
+                    <span id="user-badge-text">–</span>
+                </div>
+            </div>
+
+            <div class="section-title" id="ingest-title">Ingest Documents</div>
+            <div class="upload-container" id="drop-zone">
+                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                    <polyline points="17 8 12 3 7 8"/>
+                    <line x1="12" y1="3" x2="12" y2="15"/>
+                </svg>
+                <p>Drag & drop or <span class="browse-link">browse</span></p>
+                <input type="file" id="file-input" style="display: none;" accept=".pdf,.txt,.md">
+                <div class="file-name-preview" id="file-preview">No file selected</div>
+            </div>
+
+            <div class="option-row">
+                <label class="checkbox-container">
+                    <input type="checkbox" id="enrich-checkbox">
+                    <span class="checkmark"></span>
+                    Contextual Enrichment
+                </label>
+                <span class="tooltip" title="Enriches each chunk with global document context using Gemini to increase retrieval accuracy.">?</span>
+            </div>
+            <div class="option-row" id="groups-row">
+                <input type="text" id="groups-input" placeholder="Access groups (e.g. finance,hr) — empty = everyone"
+                       style="width:100%; padding:6px 8px; font-size:12px; background:transparent; border:1px solid rgba(255,255,255,0.15); border-radius:6px; color:inherit;">
+            </div>
+
+            <button class="btn btn-primary btn-block" id="upload-btn" disabled>Upload & Process</button>
+            <div class="progress-bar-container" id="progress-container" style="display: none;">
+                <div class="progress-bar" id="progress-bar"></div>
+                <div class="progress-text" id="progress-text">Ingesting...</div>
+            </div>
+
+            <div class="section-title">Knowledge Base</div>
+            <div class="document-list" id="document-list">
+                <div class="empty-state">No documents ingested yet.</div>
+            </div>
+        </aside>
+
+        <!-- Main chat area -->
+        <main class="chat-container">
+            <header class="chat-header">
+                <div class="header-info">
+                    <h1>Employee Knowledge Center</h1>
+                    <p>Grounded assistant answering from uploaded manuals and policies</p>
+                </div>
+                <button class="btn btn-secondary" id="clear-chat-btn">Clear Chat</button>
+            </header>
+
+            <div class="chat-messages" id="chat-messages">
+                <!-- Welcome State -->
+                <div class="welcome-screen" id="welcome-screen">
+                    <h2>Welcome to Your Grounded RAG Assistant</h2>
+                    <p>This assistant implements the 13-stage RAG reference design. Every response is guaranteed to be grounded in your ingested documents.</p>
+                    <div class="features-grid">
+                        <div class="feature-card">
+                            <div class="feature-icon">🔍</div>
+                            <h3>Hybrid Search</h3>
+                            <p>Pairs Dense (semantic) search with Lexical (keyword) search using Postgres full-text indexes.</p>
+                        </div>
+                        <div class="feature-card">
+                            <div class="feature-icon">🛡️</div>
+                            <h3>Faithfulness Guard</h3>
+                            <p>Evaluates answer correctness with a post-generation checker to prevent hallucinations.</p>
+                        </div>
+                        <div class="feature-card">
+                            <div class="feature-icon">🏷️</div>
+                            <h3>Contextual Enrichment</h3>
+                            <p>Prepend document overview contexts to chunks for cleaner semantic extraction.</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="chat-input-container">
+                <form id="chat-form">
+                    <input type="text" id="chat-input" placeholder="Ask a question about your policies..." autocomplete="off" required>
+                    <button type="submit" class="send-btn" id="send-btn">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <line x1="22" y1="2" x2="11" y2="13"/>
+                            <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+                        </svg>
+                    </button>
+                </form>
+            </div>
+        </main>
+
+        <!-- RAG details drawer -->
+        <section class="details-panel" id="details-panel">
+            <div class="panel-header">
+                <h2>RAG Execution Pipeline</h2>
+            </div>
+            <div class="panel-content" id="metrics-content">
+                <div class="no-metrics">Ask a question to see real-time pipeline execution metrics.</div>
+            </div>
+        </section>
+    </div>
+
+    <!-- Citation Modal -->
+    <div class="modal" id="citation-modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="modal-title">Citation Context</h3>
+                <span class="close-btn" id="close-modal">&times;</span>
+            </div>
+            <div class="modal-body" id="modal-body"></div>
+        </div>
+    </div>
+
+    <script>
+        const chatForm = document.getElementById('chat-form');
+        const chatInput = document.getElementById('chat-input');
+        const chatMessages = document.getElementById('chat-messages');
+        const welcomeScreen = document.getElementById('welcome-screen');
+        const dropZone = document.getElementById('drop-zone');
+        const fileInput = document.getElementById('file-input');
+        const filePreview = document.getElementById('file-preview');
+        const uploadBtn = document.getElementById('upload-btn');
+        const progressContainer = document.getElementById('progress-container');
+        const progressBar = document.getElementById('progress-bar');
+        const progressText = document.getElementById('progress-text');
+        const docList = document.getElementById('document-list');
+        const metricsContent = document.getElementById('metrics-content');
+        const clearChatBtn = document.getElementById('clear-chat-btn');
+        const citationModal = document.getElementById('citation-modal');
+        const modalTitle = document.getElementById('modal-title');
+        const modalBody = document.getElementById('modal-body');
+        const closeModal = document.getElementById('close-modal');
+
+        let chatHistory = [];
+        let currentFile = null;
+
+        // --- RBAC: API key + role-aware UI ---
+        const userBadge = document.getElementById('user-badge');
+        const userBadgeText = document.getElementById('user-badge-text');
+        const groupsRow = document.getElementById('groups-row');
+        let currentUser = null;
+
+        function getApiKey() { return localStorage.getItem('rag_api_key') || ''; }
+
+        function promptApiKey(message) {
+            const key = window.prompt(message || 'Enter your API key:', getApiKey());
+            if (key !== null) {
+                localStorage.setItem('rag_api_key', key.trim());
+            }
+            return getApiKey();
+        }
+
+        // fetch wrapper: attaches X-API-Key, re-prompts once on 401
+        async function authFetch(url, options = {}, retried = false) {
+            options.headers = Object.assign({}, options.headers);
+            const key = getApiKey();
+            if (key) options.headers['X-API-Key'] = key;
+            const res = await fetch(url, options);
+            if (res.status === 401 && !retried) {
+                promptApiKey('Session invalid or missing API key. Enter your API key:');
+                return authFetch(url, options, true);
+            }
+            return res;
+        }
+
+        async function loadCurrentUser() {
+            try {
+                const res = await authFetch('/api/me');
+                if (!res.ok) return;
+                currentUser = await res.json();
+                userBadge.style.display = 'flex';
+                userBadgeText.textContent = `👤 ${currentUser.username} · ${currentUser.role}`;
+                // Viewers cannot upload — hide the panel (server enforces regardless)
+                const canUpload = currentUser.role === 'admin' || currentUser.role === 'editor';
+                document.getElementById('ingest-title').style.display = canUpload ? '' : 'none';
+                dropZone.style.display = canUpload ? '' : 'none';
+                uploadBtn.style.display = canUpload ? '' : 'none';
+                groupsRow.style.display = canUpload ? '' : 'none';
+                document.querySelector('.option-row').style.display = canUpload ? '' : 'none';
+            } catch (err) { console.error(err); }
+        }
+        userBadge.addEventListener('click', () => { promptApiKey(); location.reload(); });
+
+        // Initialize documents
+        async function fetchDocuments() {
+            try {
+                const res = await authFetch('/api/documents');
+                const docs = await res.json();
+                
+                if (docs && docs.length > 0) {
+                    docList.innerHTML = docs.map(doc => `
+                        <div class="doc-item">
+                            <div class="doc-icon">📄</div>
+                            <div class="doc-info">
+                                <div class="doc-name" title="${doc.source}">${doc.source}</div>
+                                <div class="doc-meta">Pages: ${doc.total_pages || 1} • Ingested: ${new Date(doc.created_at).toLocaleDateString()}</div>
+                            </div>
+                        </div>
+                    `).join('');
+                } else {
+                    docList.innerHTML = '<div class="empty-state">No documents ingested yet.</div>';
+                }
+            } catch (err) {
+                console.error(err);
+                docList.innerHTML = '<div class="error-state">Failed to load documents.</div>';
+            }
+        }
+
+        // File drag and drop
+        dropZone.addEventListener('click', () => fileInput.click());
+        
+        dropZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropZone.classList.add('dragover');
+        });
+
+        dropZone.addEventListener('dragleave', () => {
+            dropZone.classList.remove('dragover');
+        });
+
+        dropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('dragover');
+            if (e.dataTransfer.files.length > 0) {
+                handleFileSelect(e.dataTransfer.files[0]);
+            }
+        });
+
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) {
+                handleFileSelect(e.target.files[0]);
+            }
+        });
+
+        function handleFileSelect(file) {
+            currentFile = file;
+            filePreview.textContent = file.name;
+            filePreview.classList.add('selected');
+            uploadBtn.removeAttribute('disabled');
+        }
+
+        // Upload and process file
+        uploadBtn.addEventListener('click', async () => {
+            if (!currentFile) return;
+
+            const formData = new FormData();
+            formData.append('file', currentFile);
+            formData.append('enrich', document.getElementById('enrich-checkbox').checked);
+            formData.append('groups', document.getElementById('groups-input').value.trim());
+
+            uploadBtn.style.display = 'none';
+            progressContainer.style.display = 'block';
+            progressBar.style.width = '20%';
+            progressText.textContent = 'Uploading...';
+
+            try {
+                // Simulate progress updates for a smoother feeling UI
+                let progress = 20;
+                const interval = setInterval(() => {
+                    if (progress < 90) {
+                        progress += 5;
+                        progressBar.style.width = `${progress}%`;
+                        if (progress > 50) progressText.textContent = 'Parsing & Chunking...';
+                        if (progress > 75) progressText.textContent = 'Generating Embeddings...';
+                    }
+                }, 500);
+
+                const res = await authFetch('/api/ingest', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                clearInterval(interval);
+
+                if (res.ok) {
+                    // Ingestion is asynchronous: poll the job until the worker finishes
+                    const { job_id } = await res.json();
+                    progressBar.style.width = '60%';
+                    progressText.textContent = 'Queued — parsing & embedding...';
+
+                    const finalStatus = await new Promise((resolve) => {
+                        const poll = setInterval(async () => {
+                            try {
+                                const jr = await authFetch(`/api/jobs/${job_id}`);
+                                if (!jr.ok) return;
+                                const job = await jr.json();
+                                if (job.status === 'processing') {
+                                    progressBar.style.width = '80%';
+                                    progressText.textContent = 'Processing (parse, chunk, embed)...';
+                                } else if (job.status === 'done' || job.status === 'failed') {
+                                    clearInterval(poll);
+                                    resolve(job);
+                                }
+                            } catch (_) { /* keep polling */ }
+                        }, 2000);
+                    });
+
+                    if (finalStatus.status === 'failed') {
+                        throw new Error(finalStatus.error || 'Ingestion failed in worker');
+                    }
+
+                    progressBar.style.width = '100%';
+                    progressText.textContent = `Ingested successfully! (${finalStatus.chunks_count} chunks)`;
+                    progressBar.classList.add('success');
+
+                    setTimeout(() => {
+                        progressContainer.style.display = 'none';
+                        uploadBtn.style.display = 'block';
+                        uploadBtn.setAttribute('disabled', 'true');
+                        filePreview.textContent = 'No file selected';
+                        filePreview.classList.remove('selected');
+                        progressBar.classList.remove('success');
+                        currentFile = null;
+                        fetchDocuments();
+                    }, 2000);
+                } else {
+                    const errData = await res.json();
+                    throw new Error(errData.detail || 'Ingestion failed');
+                }
+            } catch (err) {
+                progressBar.style.width = '100%';
+                progressBar.classList.add('error');
+                progressText.textContent = `Error: ${err.message}`;
+                setTimeout(() => {
+                    progressContainer.style.display = 'none';
+                    uploadBtn.style.display = 'block';
+                    progressBar.classList.remove('error');
+                }, 4000);
+            }
+        });
+
+        // Chat submission
+        chatForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const question = chatInput.value.trim();
+            if (!question) return;
+
+            // Remove welcome screen on first query
+            if (welcomeScreen) {
+                welcomeScreen.remove();
+            }
+
+            // Append user message
+            appendMessage('user', question);
+            chatInput.value = '';
+
+            // Append loading indicator
+            const loadingId = appendMessage('assistant-loading', '');
+
+            try {
+                const response = await authFetch('/api/query', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        question: question,
+                        history: chatHistory
+                    })
+                });
+
+                document.getElementById(loadingId).remove();
+
+                if (response.ok) {
+                    const data = await response.json();
+                    
+                    // Append assistant response
+                    appendMessage('assistant', data.answer, data.citations, data.cached || false);
+                    
+                    // Update session history
+                    chatHistory.push({ role: 'user', content: question });
+                    chatHistory.push({ role: 'assistant', content: data.answer });
+                    
+                    // Render execution metrics
+                    renderMetrics(data);
+                } else {
+                    appendMessage('assistant', 'Sorry, I encountered an error while processing your request.');
+                }
+            } catch (err) {
+                document.getElementById(loadingId).remove();
+                appendMessage('assistant', 'Sorry, I failed to communicate with the server.');
+            }
+        });
+
+        function appendMessage(sender, text, citations = [], cached = false) {
+            const msgId = `msg-${Date.now()}`;
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${sender}`;
+            messageDiv.id = msgId;
+
+            let formattedText = text;
+            
+            // Format citations as clickable buttons
+            if (citations && citations.length > 0) {
+                citations.forEach(cit => {
+                    const marker = `[${cit.id}]`;
+                    const escapedSource = encodeURIComponent(cit.source);
+                    const escapedContent = encodeURIComponent(cit.content);
+                    formattedText = formattedText.replaceAll(
+                        marker, 
+                        `<span class="citation-badge" onclick="openCitation('${escapedSource}', ${cit.page}, '${escapedContent}')">${marker}</span>`
+                    );
+                });
+            }
+
+            if (sender === 'assistant-loading') {
+                messageDiv.innerHTML = `
+                    <div class="bubble loading">
+                        <span class="dot"></span>
+                        <span class="dot"></span>
+                        <span class="dot"></span>
+                    </div>
+                `;
+            } else {
+                messageDiv.innerHTML = `
+                    <div class="avatar">${sender === 'user' ? 'U' : 'AI'}</div>
+                    <div class="bubble">
+                        ${cached ? '<span class="cached-bubble-badge">⚡ Cached</span>' : ''}
+                        <div class="message-content">${formattedText}</div>
+                        ${citations.length > 0 ? `
+                            <div class="message-citations">
+                                <strong>References:</strong>
+                                <div class="citation-cards-container">
+                                    ${citations.map(cit => `
+                                        <div class="citation-card" onclick="openCitation('${encodeURIComponent(cit.source)}', ${cit.page}, '${encodeURIComponent(cit.content)}')">
+                                            <span class="card-id">[${cit.id}]</span>
+                                            <span class="card-source">${cit.source}</span>
+                                            <span class="card-page">p. ${cit.page}</span>
+                                        </div>
+                                    `).join('')}
+                                </div>
+                            </div>
+                        ` : ''}
+                    </div>
+                `;
+            }
+
+            chatMessages.appendChild(messageDiv);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+            return msgId;
+        }
+
+        function openCitation(source, page, content) {
+            modalTitle.textContent = `${decodeURIComponent(source)} - Page ${page}`;
+            modalBody.innerHTML = `<p class="citation-modal-text">${decodeURIComponent(content)}</p>`;
+            citationModal.style.display = 'block';
+        }
+
+        closeModal.onclick = () => citationModal.style.display = 'none';
+        window.onclick = (e) => {
+            if (e.target == citationModal) {
+                citationModal.style.display = 'none';
+            }
+        };
+
+        // Render pipeline metrics
+        function renderMetrics(data) {
+            const f = data.faithfulness;
+            const d = data.debug;
+            const trace = data.trace;
+            
+            // score === null means the local faithfulness audit runs in the background
+            const auditPending = f.score === null || f.score === undefined;
+            const dialColor = auditPending ? '#94a3b8'
+                : (f.score >= 0.85 ? '#10b981' : (f.score >= 0.7 ? '#f59e0b' : '#ef4444'));
+            const dialValue = auditPending ? '…' : `${Math.round(f.score * 100)}%`;
+            const dialLabel = auditPending ? 'Auditing in background'
+                : (f.faithful ? 'Grounded' : 'Hallucination Alert');
+            
+            let traceHtml = '';
+            if (trace) {
+                traceHtml = `
+                    <div class="metric-section">
+                        <div class="section-subtitle">Execution Trace ${data.cached ? '<span class="cached-badge">⚡ Cached</span>' : ''}</div>
+                        <div class="metric-row">
+                            <span class="label">Total duration:</span>
+                            <span class="value duration-highlight">${trace.total_duration_ms} ms</span>
+                        </div>
+                        <div class="timeline">
+                            ${trace.steps.map(step => `
+                                <div class="timeline-item">
+                                    <div class="timeline-dot"></div>
+                                    <div class="timeline-content">
+                                        <div class="step-name">${step.name}</div>
+                                        <div class="step-desc">${step.description}</div>
+                                        <div class="step-duration">${step.duration_ms} ms</div>
+                                    </div>
+                                </div>
+                            `).join('')}
+                        </div>
+                    </div>
+                `;
+            }
+            
+            metricsContent.innerHTML = `
+                ${traceHtml}
+                
+                <div class="metric-section">
+                    <div class="section-subtitle">Faithfulness Check</div>
+                    <div class="gauge-container">
+                        <div class="gauge-value" style="color: ${dialColor}">${dialValue}</div>
+                        <div class="gauge-label">${dialLabel}</div>
+                    </div>
+                    <div class="reasoning-text">${f.reason}</div>
+                </div>
+
+                <div class="metric-section">
+                    <div class="section-subtitle">Query Processing</div>
+                    <div class="metric-row">
+                        <span class="label">Query Route:</span>
+                        <span class="value" style="text-transform: capitalize; color: var(--accent-hover); font-weight: 600;">
+                            ${trace && trace.steps[0] && trace.steps[0].metadata && trace.steps[0].metadata.route || 'rag'}
+                        </span>
+                    </div>
+                    <div class="metric-row">
+                        <span class="label">Standalone Query:</span>
+                        <span class="value" title="${d.standalone_query}">"${d.standalone_query}"</span>
+                    </div>
+                    ${d.metadata_filter && Object.keys(d.metadata_filter).length > 0 ? `
+                        <div class="metric-row">
+                            <span class="label">SQL Filter:</span>
+                            <span class="value" style="color: var(--success); font-weight: 600;">
+                                ${JSON.stringify(d.metadata_filter)}
+                            </span>
+                        </div>
+                    ` : ''}
+                    <div class="metric-row">
+                        <span class="label">Query Type:</span>
+                        <span class="value" style="text-transform: capitalize;">${(d.query_type || 'n/a').replace('_', ' ')}</span>
+                    </div>
+                    <div class="metric-row">
+                        <span class="label">Search Queries:</span>
+                        <span class="value">${d.expanded_queries.length} (local adaptive transform)</span>
+                    </div>
+                </div>
+
+                <div class="metric-section">
+                    <div class="section-subtitle">Retrieval & Fusion</div>
+                    <div class="metric-row">
+                        <span class="label">Dense Search hits:</span>
+                        <span class="value">${d.dense_count}</span>
+                    </div>
+                    <div class="metric-row">
+                        <span class="label">Lexical Search hits:</span>
+                        <span class="value">${d.lexical_count}</span>
+                    </div>
+                    <div class="metric-row">
+                        <span class="label">Fused Candidates (RRF):</span>
+                        <span class="value">${d.retrieved_count}</span>
+                    </div>
+                    <div class="metric-row">
+                        <span class="label">Sent to LLM (Reranked):</span>
+                        <span class="value">${d.reranked_count}</span>
+                    </div>
+                </div>
+            `;
+        }
+
+        clearChatBtn.addEventListener('click', () => {
+            chatHistory = [];
+            chatMessages.innerHTML = '';
+            chatMessages.appendChild(welcomeScreen);
+            metricsContent.innerHTML = '<div class="no-metrics">Ask a question to see real-time pipeline execution metrics.</div>';
+        });
+
+        // Initialize
+        loadCurrentUser();
+        fetchDocuments();
+    </script>
+</body>
+</html>
