@@ -120,7 +120,9 @@ class CreateUserRequest(BaseModel):
     groups: List[str] = []
 
 class UpdateUserRequest(BaseModel):
-    active: bool
+    active: Optional[bool] = None
+    role: Optional[str] = Field(None, pattern=r"^(admin|editor|viewer)$")
+    groups: Optional[List[str]] = None
 
 # ------------------------------------------------------------------- endpoints
 
@@ -149,7 +151,7 @@ def ready():
         return JSONResponse(status_code=503, content={"status": "not_ready"})
 
 @app.get("/metrics")
-def metrics():
+def metrics(user: CurrentUser = Depends(require_role("admin"))):
     if not METRICS:
         raise HTTPException(status_code=404, detail="prometheus-client not installed")
     try:
@@ -202,10 +204,40 @@ def list_users(user: CurrentUser = Depends(require_role("admin"))):
 
 @app.patch("/api/users/{user_id}")
 def update_user(user_id: int, req: UpdateUserRequest, user: CurrentUser = Depends(require_role("admin"))):
-    if not get_vector_store().set_user_active(user_id, req.active):
+    store = get_vector_store()
+    updated = store.update_user(
+        user_id,
+        role=req.role,
+        groups=[g.strip() for g in req.groups if g.strip()] if req.groups is not None else None,
+        active=req.active,
+    )
+    if not updated:
         raise HTTPException(status_code=404, detail="User not found")
     invalidate_user_cache()
-    return {"id": user_id, "active": req.active}
+    logger.info("User %d updated by %s (role=%s groups=%s active=%s)",
+                user_id, user.username, req.role, req.groups, req.active)
+    return {"id": user_id, "role": req.role, "groups": req.groups, "active": req.active}
+
+@app.delete("/api/users/{user_id}", status_code=204)
+def delete_user_endpoint(user_id: int, user: CurrentUser = Depends(require_role("admin"))):
+    if user.id == user_id:
+        raise HTTPException(status_code=400, detail="Cannot delete your own account")
+    if not get_vector_store().delete_user(user_id):
+        raise HTTPException(status_code=404, detail="User not found")
+    invalidate_user_cache()
+    logger.info("User %d deleted by %s", user_id, user.username)
+
+@app.post("/api/users/{user_id}/rotate-key")
+def rotate_key(user_id: int, user: CurrentUser = Depends(get_current_user)):
+    """Users can rotate their own key; admins can rotate anyone's key."""
+    if not user.is_admin and user.id != user_id:
+        raise HTTPException(status_code=403, detail="Cannot rotate another user's key")
+    new_key = generate_api_key()
+    if not get_vector_store().rotate_api_key(user_id, hash_key(new_key)):
+        raise HTTPException(status_code=404, detail="User not found")
+    invalidate_user_cache()
+    logger.info("API key rotated for user %d by %s", user_id, user.username)
+    return {"api_key": new_key}  # shown exactly once — not stored
 
 _SAFE_FILENAME_RE = re.compile(r"[^\w.() \-]")
 

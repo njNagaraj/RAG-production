@@ -199,6 +199,50 @@ class PostgresVectorStore(BaseVectorStore):
                 cur.execute("UPDATE users SET active = %s WHERE id = %s RETURNING id;", (active, user_id))
                 return cur.fetchone() is not None
 
+    def update_user(self, user_id: int, role: Optional[str] = None,
+                    groups: Optional[List[str]] = None, active: Optional[bool] = None) -> bool:
+        """Update role, groups, and/or active flag. Only provided fields are changed."""
+        self.connect()
+        fields, params = [], []
+        if role is not None:
+            fields.append("role = %s")
+            params.append(role)
+        if groups is not None:
+            fields.append("groups = %s")
+            params.append(groups)
+        if active is not None:
+            fields.append("active = %s")
+            params.append(active)
+        if not fields:
+            return True  # nothing to update
+        params.append(user_id)
+        with self.pool.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"UPDATE users SET {', '.join(fields)} WHERE id = %s RETURNING id;",
+                    tuple(params),
+                )
+                return cur.fetchone() is not None
+
+    def delete_user(self, user_id: int) -> bool:
+        """Hard-delete a user. query_audits rows are kept for compliance (user_id becomes orphaned)."""
+        self.connect()
+        with self.pool.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM users WHERE id = %s RETURNING id;", (user_id,))
+                return cur.fetchone() is not None
+
+    def rotate_api_key(self, user_id: int, new_key_hash: str) -> bool:
+        """Replace a user's API key hash. The old key is immediately invalidated."""
+        self.connect()
+        with self.pool.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE users SET api_key_hash = %s WHERE id = %s RETURNING id;",
+                    (new_key_hash, user_id),
+                )
+                return cur.fetchone() is not None
+
     def admin_exists(self) -> bool:
         self.connect()
         with self.pool.connection() as conn:

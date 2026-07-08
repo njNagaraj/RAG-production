@@ -7,7 +7,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="/static/style.css?v=1.2">
 </head>
 <body>
     <div class="app-container">
@@ -67,6 +67,14 @@
             <div class="document-list" id="document-list">
                 <div class="empty-state">No documents ingested yet.</div>
             </div>
+
+            <!-- Admin tab (only shown to admin role) -->
+            <div class="sidebar-footer" id="admin-tab-wrap" style="display:none;">
+                <button class="admin-tab-btn" id="admin-tab-btn" onclick="toggleAdminPanel()">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+                    <span>Manage Users</span>
+                </button>
+            </div>
         </aside>
 
         <!-- Main chat area -->
@@ -117,6 +125,45 @@
             </div>
         </main>
 
+        <!-- Admin Panel -->
+        <main class="admin-panel" id="admin-panel" style="display:none;">
+            <header class="chat-header">
+                <div class="header-info">
+                    <h1>User Management</h1>
+                    <p>Create, edit and manage users, roles and access groups</p>
+                </div>
+                <button class="btn btn-primary" id="create-user-btn" onclick="openCreateModal()">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                    Create User
+                </button>
+            </header>
+
+            <div class="admin-body">
+                <div class="admin-search-bar">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                    <input type="text" id="user-search" placeholder="Filter by username or role..." oninput="filterUsers()">
+                </div>
+
+                <div class="user-table-wrap">
+                    <table class="user-table">
+                        <thead>
+                            <tr>
+                                <th>Username</th>
+                                <th>Role</th>
+                                <th>Groups</th>
+                                <th>Status</th>
+                                <th>Created</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="user-tbody">
+                            <tr><td colspan="6" class="table-empty">Loading users...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </main>
+
         <!-- RAG details drawer -->
         <section class="details-panel" id="details-panel">
             <div class="panel-header">
@@ -126,6 +173,103 @@
                 <div class="no-metrics">Ask a question to see real-time pipeline execution metrics.</div>
             </div>
         </section>
+    </div>
+
+    <!-- Create User Modal -->
+    <div class="um-overlay" id="create-modal" style="display:none;" onclick="closeModalOnBg(event,'create-modal')">
+        <div class="um-card">
+            <div class="um-card-header">
+                <h3>Create New User</h3>
+                <button class="um-close" onclick="document.getElementById('create-modal').style.display='none'">&#x2715;</button>
+            </div>
+            <div class="um-card-body">
+                <label class="um-label">Username</label>
+                <input class="um-input" id="cm-username" type="text" placeholder="e.g. john_doe" autocomplete="off">
+                <label class="um-label">Role</label>
+                <select class="um-input" id="cm-role">
+                    <option value="viewer">viewer — read-only queries</option>
+                    <option value="editor">editor — upload + query</option>
+                    <option value="admin">admin — full access</option>
+                </select>
+                <label class="um-label">Access Groups <span style="color:var(--text-secondary);font-weight:400">(comma-separated, empty = public)</span></label>
+                <input class="um-input" id="cm-groups" type="text" placeholder="hr,finance">
+            </div>
+            <div class="um-card-footer">
+                <button class="btn btn-secondary" onclick="document.getElementById('create-modal').style.display='none'">Cancel</button>
+                <button class="btn btn-primary" onclick="submitCreateUser()">Create User</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Edit User Modal -->
+    <div class="um-overlay" id="edit-modal" style="display:none;" onclick="closeModalOnBg(event,'edit-modal')">
+        <div class="um-card">
+            <div class="um-card-header">
+                <h3>Edit User: <span id="em-username-label"></span></h3>
+                <button class="um-close" onclick="document.getElementById('edit-modal').style.display='none'">&#x2715;</button>
+            </div>
+            <div class="um-card-body">
+                <input type="hidden" id="em-user-id">
+                <label class="um-label">Role</label>
+                <select class="um-input" id="em-role">
+                    <option value="viewer">viewer</option>
+                    <option value="editor">editor</option>
+                    <option value="admin">admin</option>
+                </select>
+                <label class="um-label">Access Groups</label>
+                <input class="um-input" id="em-groups" type="text" placeholder="hr,finance">
+                <div class="um-toggle-row">
+                    <span class="um-label" style="margin:0">Active</span>
+                    <label class="um-toggle">
+                        <input type="checkbox" id="em-active">
+                        <span class="um-slider"></span>
+                    </label>
+                </div>
+            </div>
+            <div class="um-card-footer">
+                <button class="btn btn-secondary" onclick="document.getElementById('edit-modal').style.display='none'">Cancel</button>
+                <button class="btn btn-primary" onclick="submitEditUser()">Save Changes</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- API Key Reveal Modal -->
+    <div class="um-overlay" id="key-modal" style="display:none;" onclick="closeModalOnBg(event,'key-modal')">
+        <div class="um-card">
+            <div class="um-card-header">
+                <h3>🔑 API Key</h3>
+                <button class="um-close" onclick="document.getElementById('key-modal').style.display='none'">&#x2715;</button>
+            </div>
+            <div class="um-card-body">
+                <p style="color:var(--warning);font-size:13px;margin-bottom:12px;">⚠️ Save this key now. It will <strong>never</strong> be shown again.</p>
+                <div class="key-reveal-box">
+                    <code id="key-reveal-text"></code>
+                    <button class="key-copy-btn" onclick="copyKey()" title="Copy to clipboard">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                        Copy
+                    </button>
+                </div>
+            </div>
+            <div class="um-card-footer">
+                <button class="btn btn-primary" style="width:100%" onclick="document.getElementById('key-modal').style.display='none'">Done</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Confirm Dialog -->
+    <div class="um-overlay" id="confirm-modal" style="display:none;" onclick="closeModalOnBg(event,'confirm-modal')">
+        <div class="um-card" style="max-width:420px">
+            <div class="um-card-header">
+                <h3 id="confirm-title">Confirm Action</h3>
+            </div>
+            <div class="um-card-body">
+                <p id="confirm-msg" style="color:var(--text-secondary);font-size:14px;"></p>
+            </div>
+            <div class="um-card-footer">
+                <button class="btn btn-secondary" onclick="document.getElementById('confirm-modal').style.display='none'">Cancel</button>
+                <button class="btn btn-danger" id="confirm-ok-btn">Confirm</button>
+            </div>
+        </div>
     </div>
 
     <!-- Citation Modal -->
@@ -198,14 +342,207 @@
                 currentUser = await res.json();
                 userBadge.style.display = 'flex';
                 userBadgeText.textContent = `👤 ${currentUser.username} · ${currentUser.role}`;
-                // Viewers cannot upload — hide the panel (server enforces regardless)
                 const canUpload = currentUser.role === 'admin' || currentUser.role === 'editor';
                 document.getElementById('ingest-title').style.display = canUpload ? '' : 'none';
                 dropZone.style.display = canUpload ? '' : 'none';
                 uploadBtn.style.display = canUpload ? '' : 'none';
                 groupsRow.style.display = canUpload ? '' : 'none';
                 document.querySelector('.option-row').style.display = canUpload ? '' : 'none';
+                // Show admin tab only for admins
+                if (currentUser.role === 'admin') {
+                    document.getElementById('admin-tab-wrap').style.display = 'block';
+                }
             } catch (err) { console.error(err); }
+        }
+
+        // ------------------------------------------------------------------ Admin Panel
+        let adminPanelOpen = false;
+        let allUsers = [];
+
+        function toggleAdminPanel() {
+            adminPanelOpen = !adminPanelOpen;
+            document.querySelector('.chat-container').style.display = adminPanelOpen ? 'none' : '';
+            document.getElementById('admin-panel').style.display = adminPanelOpen ? 'flex' : 'none';
+            document.getElementById('details-panel').style.display = adminPanelOpen ? 'none' : '';
+            document.getElementById('admin-tab-btn').classList.toggle('active', adminPanelOpen);
+            if (adminPanelOpen) loadUsers();
+        }
+
+        async function loadUsers() {
+            const tbody = document.getElementById('user-tbody');
+            tbody.innerHTML = '<tr><td colspan="6" class="table-empty">Loading...</td></tr>';
+            try {
+                const res = await authFetch('/api/users');
+                allUsers = await res.json();
+                renderUserTable(allUsers);
+            } catch (e) {
+                tbody.innerHTML = '<tr><td colspan="6" class="table-empty" style="color:var(--error)">Failed to load users.</td></tr>';
+            }
+        }
+
+        function filterUsers() {
+            const q = document.getElementById('user-search').value.toLowerCase();
+            const filtered = allUsers.filter(u =>
+                u.username.toLowerCase().includes(q) || u.role.includes(q)
+            );
+            renderUserTable(filtered);
+        }
+
+        function renderUserTable(users) {
+            const tbody = document.getElementById('user-tbody');
+            if (!users.length) {
+                tbody.innerHTML = '<tr><td colspan="6" class="table-empty">No users found.</td></tr>';
+                return;
+            }
+            const roleColors = { admin: '#a78bfa', editor: '#60a5fa', viewer: '#9ca3af' };
+            tbody.innerHTML = users.map(u => `
+                <tr id="user-row-${u.id}">
+                    <td><strong>${u.username}</strong></td>
+                    <td><span class="role-badge" style="background:${roleColors[u.role] || '#9ca3af'}22;color:${roleColors[u.role] || '#9ca3af'};border:1px solid ${roleColors[u.role] || '#9ca3af'}44">${u.role}</span></td>
+                    <td>${u.groups && u.groups.length ? u.groups.map(g => `<span class="group-tag">${g}</span>`).join('') : '<span style="color:var(--text-secondary);font-size:12px">public</span>'}</td>
+                    <td><span class="status-pill ${u.active ? 'active' : 'inactive'}">${u.active ? 'Active' : 'Inactive'}</span></td>
+                    <td style="color:var(--text-secondary);font-size:12px">${new Date(u.created_at).toLocaleDateString()}</td>
+                    <td>
+                        <div class="action-cell">
+                            <button class="action-btn" title="Edit" onclick="openEditModal(${u.id})">✏️</button>
+                            <div class="kebab-wrap">
+                                <button class="action-btn kebab-trigger" onclick="toggleKebab(event,${u.id})">⋮</button>
+                                <div class="kebab-menu" id="kebab-${u.id}">
+                                    <button onclick="confirmRotateKey(${u.id},'${u.username}');closeKebab()">🔄 Rotate Key</button>
+                                    <button onclick="confirmDeleteUser(${u.id},'${u.username}');closeKebab()" ${currentUser && currentUser.id===u.id ? 'disabled title="Cannot delete yourself"' : ''} style="${currentUser && currentUser.id===u.id ? 'opacity:.4;cursor:not-allowed':''}">🗑️ Delete User</button>
+                                </div>
+                            </div>
+                        </div>
+                    </td>
+                </tr>
+            `).join('');
+        }
+
+        function toggleKebab(e, uid) {
+            e.stopPropagation();
+            closeKebab();
+            document.getElementById(`kebab-${uid}`).classList.add('open');
+        }
+        function closeKebab() {
+            document.querySelectorAll('.kebab-menu.open').forEach(m => m.classList.remove('open'));
+        }
+        document.addEventListener('click', closeKebab);
+
+        // --- Create User ---
+        function openCreateModal() {
+            document.getElementById('cm-username').value = '';
+            document.getElementById('cm-role').value = 'viewer';
+            document.getElementById('cm-groups').value = '';
+            document.getElementById('create-modal').style.display = 'flex';
+        }
+
+        async function submitCreateUser() {
+            const username = document.getElementById('cm-username').value.trim();
+            const role = document.getElementById('cm-role').value;
+            const groups = document.getElementById('cm-groups').value.split(',').map(g=>g.trim()).filter(Boolean);
+            if (!username) { alert('Username is required.'); return; }
+            try {
+                const res = await authFetch('/api/users', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username, role, groups })
+                });
+                if (!res.ok) { const e = await res.json(); alert(e.detail || 'Error creating user'); return; }
+                const data = await res.json();
+                document.getElementById('create-modal').style.display = 'none';
+                showKey(data.api_key);
+                loadUsers();
+            } catch(e) { alert('Network error'); }
+        }
+
+        // --- Edit User ---
+        function openEditModal(uid) {
+            const u = allUsers.find(x => x.id === uid);
+            if (!u) return;
+            document.getElementById('em-user-id').value = uid;
+            document.getElementById('em-username-label').textContent = u.username;
+            document.getElementById('em-role').value = u.role;
+            document.getElementById('em-groups').value = (u.groups || []).join(',');
+            document.getElementById('em-active').checked = u.active;
+            document.getElementById('edit-modal').style.display = 'flex';
+        }
+
+        async function submitEditUser() {
+            const uid = parseInt(document.getElementById('em-user-id').value);
+            const role = document.getElementById('em-role').value;
+            const groups = document.getElementById('em-groups').value.split(',').map(g=>g.trim()).filter(Boolean);
+            const active = document.getElementById('em-active').checked;
+            try {
+                const res = await authFetch(`/api/users/${uid}`, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ role, groups, active })
+                });
+                if (!res.ok) { const e = await res.json(); alert(e.detail || 'Update failed'); return; }
+                document.getElementById('edit-modal').style.display = 'none';
+                loadUsers();
+            } catch(e) { alert('Network error'); }
+        }
+
+        // --- Rotate Key ---
+        function confirmRotateKey(uid, username) {
+            showConfirm(
+                'Rotate API Key',
+                `This will immediately invalidate the current key for <strong>${username}</strong>. A new key will be shown once.`,
+                async () => {
+                    const res = await authFetch(`/api/users/${uid}/rotate-key`, { method: 'POST' });
+                    if (!res.ok) { alert('Failed to rotate key'); return; }
+                    const data = await res.json();
+                    showKey(data.api_key);
+                }
+            );
+        }
+
+        // --- Delete User ---
+        function confirmDeleteUser(uid, username) {
+            showConfirm(
+                'Delete User',
+                `Permanently delete user <strong>${username}</strong>? Their audit logs will be kept.`,
+                async () => {
+                    const res = await authFetch(`/api/users/${uid}`, { method: 'DELETE' });
+                    if (!res.ok) { const e = await res.json(); alert(e.detail || 'Delete failed'); return; }
+                    const row = document.getElementById(`user-row-${uid}`);
+                    if (row) { row.style.opacity='0'; row.style.transition='opacity 0.4s'; setTimeout(()=>row.remove(),400); }
+                    allUsers = allUsers.filter(u => u.id !== uid);
+                }
+            );
+        }
+
+        // --- Helpers ---
+        function showKey(key) {
+            document.getElementById('key-reveal-text').textContent = key;
+            document.getElementById('key-modal').style.display = 'flex';
+        }
+
+        function copyKey() {
+            const key = document.getElementById('key-reveal-text').textContent;
+            navigator.clipboard.writeText(key).then(() => {
+                const btn = document.querySelector('.key-copy-btn');
+                btn.textContent = '✓ Copied';
+                setTimeout(() => { btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg> Copy'; }, 2000);
+            });
+        }
+
+        function showConfirm(title, msg, onOk) {
+            document.getElementById('confirm-title').textContent = title;
+            document.getElementById('confirm-msg').innerHTML = msg;
+            document.getElementById('confirm-modal').style.display = 'flex';
+            const btn = document.getElementById('confirm-ok-btn');
+            btn.onclick = async () => {
+                document.getElementById('confirm-modal').style.display = 'none';
+                await onOk();
+            };
+        }
+
+        function closeModalOnBg(e, id) {
+            if (e.target === document.getElementById(id)) {
+                document.getElementById(id).style.display = 'none';
+            }
         }
         userBadge.addEventListener('click', () => { promptApiKey(); location.reload(); });
 

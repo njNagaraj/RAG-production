@@ -47,7 +47,36 @@ def compute_access_key(user: CurrentUser) -> str:
         basis = "groups:" + ",".join(sorted(set(user.groups)))
     return hashlib.sha256(basis.encode("utf-8")).hexdigest()[:32]
 
-# --- request authentication ---------------------------------------------------
+# ---- brute-force lockout -----------------------------------------------------
+
+_failed_attempts: Dict[str, List[float]] = {}   # ip -> list of failure timestamps
+_FAIL_WINDOW_S = 60.0    # rolling window in seconds
+_FAIL_MAX = 10           # failures allowed before lockout
+_LOCKOUT_S = 300.0       # lockout duration (5 minutes)
+_fail_lock = threading.Lock()
+
+def _check_brute_force(ip: str):
+    """Raise 429 if this IP has exceeded the auth-failure limit."""
+    now = time.time()
+    with _fail_lock:
+        attempts = [t for t in _failed_attempts.get(ip, []) if now - t < _FAIL_WINDOW_S]
+        _failed_attempts[ip] = attempts
+        if len(attempts) >= _FAIL_MAX:
+            raise HTTPException(
+                status_code=429,
+                detail=f"Too many failed auth attempts from this IP. Try again in {int(_LOCKOUT_S // 60)} minutes.",
+            )
+
+def _record_failure(ip: str):
+    """Record one auth failure for this IP."""
+    now = time.time()
+    with _fail_lock:
+        bucket = _failed_attempts.setdefault(ip, [])
+        bucket.append(now)
+        # Trim old entries to keep memory bounded
+        _failed_attempts[ip] = [t for t in bucket if now - t < _LOCKOUT_S]
+
+# ---- request-level user cache -------------------------------------------------
 
 _CACHE_TTL_S = 30.0
 _user_cache: Dict[str, Any] = {}   # key_hash -> (expires_at, CurrentUser | None)
@@ -93,11 +122,15 @@ def get_current_user(request: Request) -> CurrentUser:
             _auth_disabled_logged = True
         return _DEV_USER
 
+    ip = request.client.host if request.client else "unknown"
+    _check_brute_force(ip)
+
     api_key = request.headers.get("X-API-Key", "")
     if not api_key:
         raise HTTPException(status_code=401, detail="Missing X-API-Key header")
     user = _lookup_user(hash_key(api_key))
     if user is None:
+        _record_failure(ip)
         raise HTTPException(status_code=401, detail="Invalid or inactive API key")
     return user
 
