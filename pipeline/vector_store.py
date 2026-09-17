@@ -574,7 +574,7 @@ class PostgresVectorStore(BaseVectorStore):
             with conn.cursor() as cur:
                 cur.execute("DELETE FROM document_chunks WHERE document_id = %s", (document_id,))
                 with cur.copy(
-                    "COPY document_chunks (document_id, org_id, chunk_index, page_num, content, context, embedding) FROM STDIN"
+                    "COPY document_chunks (document_id, org_id, chunk_index, page_num, content, context, embedding, parent_content, parent_chunk_index) FROM STDIN"
                 ) as copy:
                     for chunk, embedding in zip(chunks, embeddings):
                         copy.write_row((
@@ -585,6 +585,8 @@ class PostgresVectorStore(BaseVectorStore):
                             chunk["text"],
                             chunk.get("context"),
                             _vec(embedding),
+                            chunk.get("parent_content"),
+                            chunk.get("parent_chunk_index"),
                         ))
             conn.commit()
 
@@ -616,8 +618,12 @@ class PostgresVectorStore(BaseVectorStore):
         clauses = [f"{alias}.org_id = %s"]
         params.append(org_id)
         if visible_node_ids is not None:
-            clauses.append(f"{alias}.unit_id = ANY(%s)")
-            params.append(visible_node_ids)
+            if not visible_node_ids:
+                clauses.append("1 = 0")
+            else:
+                placeholders = ",".join(["%s"] * len(visible_node_ids))
+                clauses.append(f"{alias}.unit_id IN ({placeholders})")
+                params.extend(visible_node_ids)
         return clauses
 
     def get_all_documents(self, org_id: int, visible_node_ids: Optional[List[int]] = None,
@@ -651,9 +657,10 @@ class PostgresVectorStore(BaseVectorStore):
 
     # ------------------------------------------------------------------ search
 
-    def _filter_sql(self, org_id: int, visible_node_ids: Optional[List[int]],
+    @classmethod
+    def _filter_sql(cls, org_id: int, visible_node_ids: Optional[List[int]],
                     metadata_filter: Optional[Dict[str, Any]], params: list) -> List[str]:
-        clauses = self._visibility_sql(org_id, visible_node_ids, params)
+        clauses = cls._visibility_sql(org_id, visible_node_ids, params, alias="d")
         if metadata_filter:
             if "source_doc" in metadata_filter:
                 clauses.append("d.source ILIKE %s")
@@ -678,7 +685,8 @@ class PostgresVectorStore(BaseVectorStore):
                 dc.id,
                 dc.chunk_index,
                 dc.page_num,
-                dc.content,
+                COALESCE(dc.parent_content, dc.content) AS content,
+                dc.content AS child_content,
                 dc.context,
                 d.source as source_doc,
                 1 - (dc.embedding <=> %s::vector) AS score
@@ -712,7 +720,8 @@ class PostgresVectorStore(BaseVectorStore):
                 dc.id,
                 dc.chunk_index,
                 dc.page_num,
-                dc.content,
+                COALESCE(dc.parent_content, dc.content) AS content,
+                dc.content AS child_content,
                 dc.context,
                 d.source as source_doc,
                 ts_rank_cd(dc.content_tsvector, websearch_to_tsquery('english', %s)) AS score

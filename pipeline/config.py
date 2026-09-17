@@ -47,10 +47,12 @@ class Settings(BaseSettings):
     # ingest time (one-off per document; query time stays fully local)
     describe_images: bool = False
 
-    # Chunking: auto (adaptive dispatcher) | fixed | page | code | semantic
+    # Chunking: auto (adaptive dispatcher) | parent_child | fixed | page | code | semantic
     chunking_strategy: str = "auto"
     chunk_size: int = 500
     chunk_overlap: int = 75
+    parent_chunk_size: int = 800
+    child_chunk_size: int = 150
 
     # Retrieval (IG pattern: retrieve top-20 per method, fuse, rerank all, keep 5)
     top_k_retrieval: int = 20

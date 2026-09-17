@@ -37,12 +37,15 @@ def count_tokens(text: str) -> int:
 
 class Chunk:
     def __init__(self, text: str, doc_metadata: Dict[str, Any], chunk_index: int,
-                 page_num: int = 1, context: Optional[str] = None):
+                 page_num: int = 1, context: Optional[str] = None,
+                 parent_content: Optional[str] = None, parent_chunk_index: Optional[int] = None):
         self.text = text
         self.doc_metadata = doc_metadata
         self.chunk_index = chunk_index
         self.page_num = page_num
         self.context = context
+        self.parent_content = parent_content
+        self.parent_chunk_index = parent_chunk_index
 
     @property
     def full_text(self) -> str:
@@ -58,6 +61,8 @@ class Chunk:
             "page_num": self.page_num,
             "context": self.context,
             "full_text": self.full_text,
+            "parent_content": self.parent_content,
+            "parent_chunk_index": self.parent_chunk_index,
         }
 
 # ---------------------------------------------------------------------------
@@ -339,6 +344,77 @@ class SemanticStrategy(_BaseStrategy):
             emit_group()
         return chunks
 
+class ParentChildStrategy(_BaseStrategy):
+    """
+    Hierarchical chunker (100% local, zero-LLM):
+    1. Splits document into large Parent Chunks (~800 tokens) using structure/headings.
+    2. Subdivides each parent chunk into small Child Chunks (~150 tokens) with sentence preservation.
+    3. Each child chunk embeds its own specific 150-token content for high-precision search,
+       but attaches the parent 800-token content for synthesis context.
+    """
+
+    def __init__(self, parent_size: int = None, child_size: int = None, child_overlap: int = 30):
+        super().__init__(chunk_size=child_size or settings.child_chunk_size, chunk_overlap=child_overlap)
+        self.parent_size = parent_size or settings.parent_chunk_size
+        self.child_size = child_size or settings.child_chunk_size
+        self.child_overlap = child_overlap
+        self._parent_strategy = StructureAwareStrategy(chunk_size=self.parent_size, chunk_overlap=100)
+
+    def split(self, doc_data: Dict[str, Any]) -> List[Chunk]:
+        doc_metadata = doc_data["metadata"]
+        parent_chunks = self._parent_strategy.split(doc_data)
+
+        all_child_chunks: List[Chunk] = []
+        global_child_idx = 0
+
+        for parent_idx, parent in enumerate(parent_chunks):
+            parent_text = parent.text
+            page_num = parent.page_num
+            heading_context = parent.context
+
+            sentences = _split_sentences(parent_text)
+            if not sentences:
+                sentences = [parent_text]
+
+            current_child: List[str] = []
+            current_len = 0
+
+            def emit_child():
+                nonlocal current_child, current_len, global_child_idx
+                if not current_child:
+                    return
+                child_text = " ".join(current_child).strip()
+                all_child_chunks.append(Chunk(
+                    text=child_text,
+                    doc_metadata=doc_metadata,
+                    chunk_index=global_child_idx,
+                    page_num=page_num,
+                    context=heading_context,
+                    parent_content=parent_text,
+                    parent_chunk_index=parent_idx,
+                ))
+                global_child_idx += 1
+
+                carried, carried_len = [], 0
+                for s in reversed(current_child):
+                    s_tokens = count_tokens(s)
+                    if carried_len + s_tokens > self.child_overlap:
+                        break
+                    carried.insert(0, s)
+                    carried_len += s_tokens
+                current_child = carried
+                current_len = carried_len
+
+            for sent in sentences:
+                s_tokens = count_tokens(sent)
+                if current_len + s_tokens > self.child_size and current_child:
+                    emit_child()
+                current_child.append(sent)
+                current_len += s_tokens
+            emit_child()
+
+        return all_child_chunks
+
 # ---------------------------------------------------------------------------
 # Adaptive dispatcher (IG "hybrid/agentic chunking")
 # ---------------------------------------------------------------------------
@@ -350,7 +426,7 @@ class Chunker:
       page-unit document -> page-level (invoices/resumes/statements)
       everything else    -> recursive structure-aware (headings/sections/tables,
                             then paragraphs, then sentences)
-    CHUNKING_STRATEGY env forces a single strategy (fixed|page|code|semantic).
+    CHUNKING_STRATEGY env forces a single strategy (parent_child|fixed|page|code|semantic).
     """
 
     def __init__(self, chunk_size: int = None, chunk_overlap: int = None):
@@ -364,10 +440,14 @@ class Chunker:
             return PageLevelStrategy(self.chunk_size, self.chunk_overlap)
         if name == "semantic":
             return SemanticStrategy(self.chunk_size, self.chunk_overlap)
+        if name in ("parent_child", "hierarchical"):
+            return ParentChildStrategy(parent_size=settings.parent_chunk_size, child_size=settings.child_chunk_size)
         return StructureAwareStrategy(self.chunk_size, self.chunk_overlap)
 
     def choose_strategy(self, doc_data: Dict[str, Any]) -> str:
         forced = settings.chunking_strategy.lower()
+        if forced in ("parent_child", "hierarchical"):
+            return "parent_child"
         if forced not in ("auto", ""):
             return forced
 
