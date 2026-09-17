@@ -51,19 +51,22 @@ def test_db_connection():
         print("[+] Migrations applied.")
 
         print("[*] Verifying pgvector insert (COPY) and search...")
+        org = store.ensure_default_org()
         doc_id = store.insert_document({
             "source": "test_doc.txt",
             "title": "Test Document",
             "total_pages": 1,
-            "file_path": "test_doc.txt"
+            "file_path": "test_doc.txt",
+            "org_id": org["org_id"],
+            "unit_id": org["root_unit_id"],
         })
 
         dummy_vector = [0.1] * dimension
         store.insert_chunks(doc_id, [
             {"chunk_index": 0, "page_num": 1, "text": "This is test database content.", "context": "testing"}
-        ], [dummy_vector])
+        ], [dummy_vector], org_id=org["org_id"])
 
-        results = store.dense_search(dummy_vector, top_k=1)
+        results = store.dense_search(dummy_vector, top_k=1, org_id=org["org_id"])
         if results:
             print("[+] pgvector search test successful!")
         else:

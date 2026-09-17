@@ -25,10 +25,16 @@ services:
   api:
     build: .
     container_name: rag_api
-    env_file: .env
+    env_file:
+      - path: .env
+        required: false
     environment:
-      DB_HOST: postgres
+      DB_HOST: ${DB_HOST:-postgres}
+      DB_USER: ${DB_USER:-postgres}
+      DB_PASSWORD: ${DB_PASSWORD:-postgres}
+      DB_NAME: ${DB_NAME:-rag_db}
       UPLOAD_DIR: /app/uploads
+      GENERATION_PROVIDER: ${GENERATION_PROVIDER:-auto}
     ports:
       - "8000:8000"
     volumes:
@@ -52,9 +58,14 @@ services:
     build: .
     container_name: rag_worker
     command: ["python", "worker.py"]
-    env_file: .env
+    env_file:
+      - path: .env
+        required: false
     environment:
-      DB_HOST: postgres
+      DB_HOST: ${DB_HOST:-postgres}
+      DB_USER: ${DB_USER:-postgres}
+      DB_PASSWORD: ${DB_PASSWORD:-postgres}
+      DB_NAME: ${DB_NAME:-rag_db}
       UPLOAD_DIR: /app/uploads
     volumes:
       - uploads:/app/uploads

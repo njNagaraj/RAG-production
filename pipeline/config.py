@@ -2,10 +2,23 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import Optional, List
 
 class Settings(BaseSettings):
-    # API Keys (Gemini is used ONLY for final answer generation and
-    # optional ingestion-time image descriptions)
+    # API Keys & Cloud Providers
     gemini_api_key: Optional[str] = None
+    gemini_model: str = "gemini-2.5-flash"
     cohere_api_key: Optional[str] = None
+
+    openai_api_key: Optional[str] = None
+    openai_model: str = "gpt-4o-mini"
+    openai_base_url: Optional[str] = None  # Supports vLLM, LocalAI, Together, etc.
+
+    anthropic_api_key: Optional[str] = None
+    anthropic_model: str = "claude-3-5-haiku-20241022"
+
+    ollama_base_url: str = "http://localhost:11434"
+    ollama_model: str = "llama3.2"
+
+    groq_api_key: Optional[str] = None
+    deepseek_api_key: Optional[str] = None
 
     # Database Configuration
     db_host: str = "localhost"
@@ -17,9 +30,9 @@ class Settings(BaseSettings):
     db_pool_max: int = 10
 
     # Providers
-    # generation: gemini (the single sanctioned cloud call)
-    generation_provider: str = "gemini"
-    # embedding: local (fastembed ONNX) | gemini
+    # generation: auto | gemini | openai | anthropic | ollama | groq | deepseek | mock
+    generation_provider: str = "auto"
+    # embedding: local (fastembed ONNX) | gemini | openai | ollama
     embedding_provider: str = "local"
     # reranker: local (cross-encoder ONNX) | cohere | none
     reranker_provider: str = "local"
@@ -50,9 +63,10 @@ class Settings(BaseSettings):
     cache_ttl_hours: int = 168  # 7 days
 
     # Security
-    # RBAC: auth is DB-backed (users table). This key bootstraps the first
-    # admin account on startup. No users + no bootstrap key = auth disabled (dev only).
-    admin_bootstrap_key: Optional[str] = None
+    # Multi-tenant RBAC: auth is DB-backed (users table). This key bootstraps the
+    # platform administrator, which provisions customer organizations.
+    # No users + no bootstrap key = auth disabled (dev only, synthetic org owner).
+    platform_bootstrap_key: Optional[str] = None
     cors_origins: str = "*"  # comma-separated origins; "*" only for dev
     max_upload_mb: int = 50
     rate_limit_query: str = "60/minute"

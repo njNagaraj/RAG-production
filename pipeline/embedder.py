@@ -87,6 +87,61 @@ class GeminiEmbedder(BaseEmbedder):
     def dimension(self) -> int:
         return self._dimension
 
+class OpenAIEmbedder(BaseEmbedder):
+    """Cloud embeddings via OpenAI (e.g. text-embedding-3-small)."""
+    def __init__(self, model_name: str = "text-embedding-3-small"):
+        api_key = settings.openai_api_key
+        if not api_key:
+            raise ValueError("OPENAI_API_KEY is required for OpenAIEmbedder")
+        from openai import OpenAI
+        self.client = OpenAI(api_key=api_key, base_url=settings.openai_base_url)
+        self.model_name = model_name
+        self._dimension = 1536 if "small" in model_name else 3072
+
+    def embed_query(self, text: str) -> List[float]:
+        res = self.client.embeddings.create(input=[text], model=self.model_name)
+        return res.data[0].embedding
+
+    def embed_documents(self, texts: List[str]) -> List[List[float]]:
+        if not texts:
+            return []
+        res = self.client.embeddings.create(input=texts, model=self.model_name)
+        return [item.embedding for item in res.data]
+
+    @property
+    def dimension(self) -> int:
+        return self._dimension
+
+class OllamaEmbedder(BaseEmbedder):
+    """Local embeddings via Ollama (e.g. nomic-embed-text)."""
+    def __init__(self, model_name: str = "nomic-embed-text"):
+        self.base_url = settings.ollama_base_url.rstrip("/")
+        self.model_name = model_name
+        self._dimension = 768
+
+    def embed_query(self, text: str) -> List[float]:
+        return self._embed_single(text)
+
+    def embed_documents(self, texts: List[str]) -> List[List[float]]:
+        return [self._embed_single(t) for t in texts]
+
+    def _embed_single(self, text: str) -> List[float]:
+        import urllib.request
+        import json
+        payload = json.dumps({"model": self.model_name, "prompt": text}).encode("utf-8")
+        req = urllib.request.Request(
+            f"{self.base_url}/api/embeddings",
+            data=payload,
+            headers={"Content-Type": "application/json"}
+        )
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            return data.get("embedding", [])
+
+    @property
+    def dimension(self) -> int:
+        return self._dimension
+
 _embedder_instance: Optional[BaseEmbedder] = None
 _embedder_lock = threading.Lock()
 
@@ -101,6 +156,11 @@ def get_embedder() -> BaseEmbedder:
                     _embedder_instance = FastEmbedEmbedder()
                 elif provider == "gemini":
                     _embedder_instance = GeminiEmbedder()
+                elif provider == "openai":
+                    _embedder_instance = OpenAIEmbedder()
+                elif provider == "ollama":
+                    _embedder_instance = OllamaEmbedder()
                 else:
                     raise ValueError(f"Unsupported embedding provider: {settings.embedding_provider}")
     return _embedder_instance
+

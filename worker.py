@@ -61,8 +61,8 @@ def main():
         job_id = job["id"]
         logger.info("Processing job %d: %s", job_id, job["filename"])
         try:
-            result = ingest_file(job["stored_path"], enrich=job["enrich"], source_name=job["filename"],
-                                 allowed_groups=list(job.get("allowed_groups") or []),
+            result = ingest_file(job["stored_path"], org_id=job["org_id"], unit_id=job["unit_id"],
+                                 enrich=job["enrich"], source_name=job["filename"],
                                  uploaded_by=job.get("uploaded_by"))
             store.finish_ingest_job(
                 job_id, "done",

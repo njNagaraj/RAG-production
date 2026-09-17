@@ -5,5 +5,10 @@ __pycache__/
 *.pyc
 uploads/
 models/
-.pytest_cache/
+*.pytest_cache/
 *.log
+dist/
+build/
+*.egg-info/
+.DS_Store
+Thumbs.db

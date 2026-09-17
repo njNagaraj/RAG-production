@@ -1,0 +1,24 @@
+name: "Feature Request / Provider RFC"
+description: "Suggest a new feature, vector store adapter, or LLM provider"
+title: "[FEATURE]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        We love community contributions! Share your ideas for making Production RAG better.
+  - type: textarea
+    id: problem
+    attributes:
+      label: "Problem or Use Case"
+      description: "Is your feature request related to a problem or a specific enterprise use case?"
+      placeholder: "I want to use Milvus/Qdrant as my vector backend because..."
+    validations:
+      required: true
+  - type: textarea
+    id: proposed-solution
+    attributes:
+      label: "Proposed Solution"
+      description: "Describe how you envision this feature working."
+    validations:
+      required: true

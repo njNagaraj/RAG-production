@@ -23,26 +23,29 @@ class BaseVectorStore(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def insert_chunks(self, document_id: int, chunks: List[Dict[str, Any]], embeddings: List[List[float]]):
+    def insert_chunks(self, document_id: int, chunks: List[Dict[str, Any]],
+                      embeddings: List[List[float]], org_id: int):
         pass
 
     @abc.abstractmethod
-    def get_all_documents(self, limit: int = 100, offset: int = 0,
-                          allowed_groups: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+    def get_all_documents(self, org_id: int, visible_node_ids: Optional[List[int]] = None,
+                          limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
         pass
 
     @abc.abstractmethod
-    def list_sources(self, allowed_groups: Optional[List[str]] = None) -> List[str]:
+    def list_sources(self, org_id: int, visible_node_ids: Optional[List[int]] = None) -> List[str]:
         pass
 
     @abc.abstractmethod
-    def dense_search(self, query_vector: List[float], top_k: int, metadata_filter: Dict[str, Any] = None,
-                     allowed_groups: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+    def dense_search(self, query_vector: List[float], top_k: int, org_id: int,
+                     visible_node_ids: Optional[List[int]] = None,
+                     metadata_filter: Dict[str, Any] = None) -> List[Dict[str, Any]]:
         pass
 
     @abc.abstractmethod
-    def lexical_search(self, query_text: str, top_k: int, metadata_filter: Dict[str, Any] = None,
-                       allowed_groups: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+    def lexical_search(self, query_text: str, top_k: int, org_id: int,
+                       visible_node_ids: Optional[List[int]] = None,
+                       metadata_filter: Dict[str, Any] = None) -> List[Dict[str, Any]]:
         pass
 
     @abc.abstractmethod
@@ -52,7 +55,7 @@ class BaseVectorStore(abc.ABC):
 
     @abc.abstractmethod
     def add_to_semantic_cache(self, query_text: str, query_embedding: List[float], answer: str,
-                              citations: List[Dict[str, Any]], access_key: str = "public"):
+                              citations: List[Dict[str, Any]], org_id: int, access_key: str = "public"):
         pass
 
 def _vec(embedding: List[float]) -> str:
@@ -64,6 +67,9 @@ class PostgresVectorStore(BaseVectorStore):
     Pooled Postgres + pgvector store. One pool per process; every operation
     borrows a connection and returns it. Schema is managed by versioned SQL
     migrations — never destructive DDL at runtime.
+
+    Multi-tenant: every document/chunk/cache/job/audit row carries org_id;
+    document visibility is resolved through the org_units hierarchy.
     """
 
     def __init__(self):
@@ -113,7 +119,6 @@ class PostgresVectorStore(BaseVectorStore):
             try:
                 with conn.cursor() as cur:
                     # Dimension guard FIRST — fail loudly, never drop.
-                    # to_regclass returns NULL (no rows) when the table doesn't exist yet.
                     for table, column in (("document_chunks", "embedding"), ("semantic_cache", "query_embedding")):
                         cur.execute(
                             """
@@ -154,24 +159,262 @@ class PostgresVectorStore(BaseVectorStore):
                 conn.rollback()
                 raise
             finally:
-                # Advisory locks are session-level: they survive the rollback
-                # and must be released on a clean transaction.
                 with conn.cursor() as cur:
                     cur.execute("SELECT pg_advisory_unlock(727272);")
                 conn.commit()
 
-    # ------------------------------------------------------------------- users
+    # ----------------------------------------------------------- organizations
 
-    def create_user(self, username: str, api_key_hash: str, role: str, groups: List[str]) -> int:
+    def create_organization(self, name: str, slug: str, owner_username: str,
+                            owner_key_hash: str) -> Dict[str, Any]:
+        """
+        Provisions a tenant transactionally: organization + root org unit +
+        owner user (role assignment 'owner' at the root). Returns the ids.
+        """
+        self.connect()
+        with self.pool.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO organizations (name, slug) VALUES (%s, %s) RETURNING id;",
+                    (name, slug),
+                )
+                org_id = cur.fetchone()["id"]
+
+                cur.execute(
+                    """
+                    INSERT INTO org_units (org_id, parent_id, type, name, ancestor_ids)
+                    VALUES (%s, NULL, 'org', %s, '{}') RETURNING id;
+                    """,
+                    (org_id, name),
+                )
+                root_id = cur.fetchone()["id"]
+                cur.execute("UPDATE org_units SET ancestor_ids = ARRAY[%s] WHERE id = %s;", (root_id, root_id))
+
+                cur.execute(
+                    """
+                    INSERT INTO users (username, api_key_hash, role, org_id, home_unit_id, active)
+                    VALUES (%s, %s, 'owner', %s, %s, TRUE) RETURNING id;
+                    """,
+                    (owner_username, owner_key_hash, org_id, root_id),
+                )
+                owner_id = cur.fetchone()["id"]
+
+                cur.execute(
+                    """
+                    INSERT INTO role_assignments (org_id, user_id, unit_id, role)
+                    VALUES (%s, %s, %s, 'owner');
+                    """,
+                    (org_id, owner_id, root_id),
+                )
+            conn.commit()
+        return {"org_id": org_id, "root_unit_id": root_id, "owner_user_id": owner_id}
+
+    def get_organization(self, org_id: int) -> Optional[Dict[str, Any]]:
+        self.connect()
+        with self.pool.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT id, name, slug, plan, active, created_at FROM organizations WHERE id = %s;",
+                            (org_id,))
+                return cur.fetchone()
+
+    def list_organizations(self) -> List[Dict[str, Any]]:
+        self.connect()
+        with self.pool.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT id, name, slug, plan, active, created_at FROM organizations ORDER BY id;")
+                return cur.fetchall()
+
+    def ensure_default_org(self) -> Dict[str, Any]:
+        """Find-or-create the 'default' org + root unit. Used by dev-mode auth bypass."""
+        self.connect()
+        with self.pool.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT id FROM organizations WHERE slug = 'default';")
+                row = cur.fetchone()
+                if row:
+                    org_id = row["id"]
+                    cur.execute("SELECT id FROM org_units WHERE org_id = %s AND type = 'org' LIMIT 1;", (org_id,))
+                    root_id = cur.fetchone()["id"]
+                else:
+                    cur.execute("INSERT INTO organizations (name, slug) VALUES ('Default Organization', 'default') RETURNING id;")
+                    org_id = cur.fetchone()["id"]
+                    cur.execute(
+                        "INSERT INTO org_units (org_id, parent_id, type, name, ancestor_ids) "
+                        "VALUES (%s, NULL, 'org', 'Default Organization', '{}') RETURNING id;",
+                        (org_id,),
+                    )
+                    root_id = cur.fetchone()["id"]
+                    cur.execute("UPDATE org_units SET ancestor_ids = ARRAY[%s] WHERE id = %s;", (root_id, root_id))
+            conn.commit()
+        return {"org_id": org_id, "root_unit_id": root_id}
+
+    def get_org_root_unit(self, org_id: int) -> Optional[int]:
+        self.connect()
+        with self.pool.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT id FROM org_units WHERE org_id = %s AND type = 'org' LIMIT 1;", (org_id,))
+                row = cur.fetchone()
+                return row["id"] if row else None
+
+    # -------------------------------------------------------------- org units
+
+    def create_unit(self, org_id: int, parent_id: int, unit_type: str, name: str) -> int:
+        """Creates a department/team under parent; materializes ancestor_ids = parent path + self."""
+        self.connect()
+        with self.pool.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT ancestor_ids, org_id FROM org_units WHERE id = %s;", (parent_id,))
+                parent = cur.fetchone()
+                if not parent or parent["org_id"] != org_id:
+                    raise ValueError("Parent unit not found in this organization")
+                cur.execute(
+                    """
+                    INSERT INTO org_units (org_id, parent_id, type, name, ancestor_ids)
+                    VALUES (%s, %s, %s, %s, '{}') RETURNING id;
+                    """,
+                    (org_id, parent_id, unit_type, name),
+                )
+                unit_id = cur.fetchone()["id"]
+                new_path = list(parent["ancestor_ids"]) + [unit_id]
+                cur.execute("UPDATE org_units SET ancestor_ids = %s WHERE id = %s;", (new_path, unit_id))
+            conn.commit()
+        return unit_id
+
+    def get_unit(self, unit_id: int) -> Optional[Dict[str, Any]]:
+        self.connect()
+        with self.pool.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT id, org_id, parent_id, type, name, ancestor_ids FROM org_units WHERE id = %s;",
+                    (unit_id,),
+                )
+                return cur.fetchone()
+
+    def get_unit_tree(self, org_id: int) -> List[Dict[str, Any]]:
         self.connect()
         with self.pool.connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    INSERT INTO users (username, api_key_hash, role, groups)
-                    VALUES (%s, %s, %s, %s) RETURNING id;
+                    SELECT id, parent_id, type, name, ancestor_ids
+                    FROM org_units WHERE org_id = %s ORDER BY array_length(ancestor_ids, 1), name;
                     """,
-                    (username, api_key_hash, role, groups),
+                    (org_id,),
+                )
+                return cur.fetchall()
+
+    def update_unit(self, unit_id: int, org_id: int, name: str) -> bool:
+        self.connect()
+        with self.pool.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("UPDATE org_units SET name = %s WHERE id = %s AND org_id = %s RETURNING id;",
+                            (name, unit_id, org_id))
+                return cur.fetchone() is not None
+
+    def delete_unit(self, unit_id: int, org_id: int) -> bool:
+        """Deletes a unit and its subtree (CASCADE). Refuses to delete the org root."""
+        self.connect()
+        with self.pool.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT type FROM org_units WHERE id = %s AND org_id = %s;", (unit_id, org_id))
+                row = cur.fetchone()
+                if not row:
+                    return False
+                if row["type"] == "org":
+                    raise ValueError("Cannot delete the organization root unit")
+                cur.execute("DELETE FROM org_units WHERE id = %s AND org_id = %s RETURNING id;", (unit_id, org_id))
+                deleted = cur.fetchone() is not None
+            conn.commit()
+            return deleted
+
+    def subtree_ids(self, unit_id: int) -> List[int]:
+        """All nodes at or below unit_id (uses GIN on ancestor_ids)."""
+        self.connect()
+        with self.pool.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT id FROM org_units WHERE %s = ANY(ancestor_ids);", (unit_id,))
+                return [r["id"] for r in cur.fetchall()]
+
+    def compute_visible_node_ids(self, org_id: int, assignment_unit_ids: List[int]) -> List[int]:
+        """
+        Documents inherit downward and authority covers a subtree, so a role
+        assignment at node N lets a user read docs attached to
+        subtree(N) ∪ ancestors(N). Returns the union over all assignments.
+        """
+        if not assignment_unit_ids:
+            return []
+        self.connect()
+        assign_set = set(assignment_unit_ids)
+        visible: set = set()
+        with self.pool.connection() as conn:
+            with conn.cursor() as cur:
+                # ancestor_ids && assign_ids => the row is in the subtree of some assignment node
+                cur.execute(
+                    "SELECT id, ancestor_ids FROM org_units WHERE org_id = %s AND ancestor_ids && %s::int[];",
+                    (org_id, list(assign_set)),
+                )
+                for row in cur.fetchall():
+                    visible.add(row["id"])                       # subtree member
+                    if row["id"] in assign_set:
+                        visible.update(row["ancestor_ids"])      # ancestors of the assignment node
+        return sorted(visible)
+
+    # -------------------------------------------------------------- role mgmt
+
+    def add_role_assignment(self, org_id: int, user_id: int, unit_id: int, role: str) -> int:
+        self.connect()
+        with self.pool.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO role_assignments (org_id, user_id, unit_id, role)
+                    VALUES (%s, %s, %s, %s)
+                    ON CONFLICT (user_id, unit_id, role) DO UPDATE SET role = EXCLUDED.role
+                    RETURNING id;
+                    """,
+                    (org_id, user_id, unit_id, role),
+                )
+                rid = cur.fetchone()["id"]
+            conn.commit()
+            return rid
+
+    def remove_role_assignment(self, assignment_id: int, org_id: int) -> bool:
+        self.connect()
+        with self.pool.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM role_assignments WHERE id = %s AND org_id = %s RETURNING id;",
+                            (assignment_id, org_id))
+                ok = cur.fetchone() is not None
+            conn.commit()
+            return ok
+
+    def get_user_assignments(self, user_id: int) -> List[Dict[str, Any]]:
+        self.connect()
+        with self.pool.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT ra.id, ra.unit_id, ra.role, ou.name AS unit_name, ou.type AS unit_type
+                    FROM role_assignments ra JOIN org_units ou ON ra.unit_id = ou.id
+                    WHERE ra.user_id = %s ORDER BY ra.id;
+                    """,
+                    (user_id,),
+                )
+                return cur.fetchall()
+
+    # ------------------------------------------------------------------- users
+
+    def create_user(self, username: str, api_key_hash: str, role: str, org_id: int,
+                    home_unit_id: int) -> int:
+        self.connect()
+        with self.pool.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO users (username, api_key_hash, role, org_id, home_unit_id, active)
+                    VALUES (%s, %s, %s, %s, %s, TRUE) RETURNING id;
+                    """,
+                    (username, api_key_hash, role, org_id, home_unit_id),
                 )
                 return cur.fetchone()["id"]
 
@@ -180,74 +423,61 @@ class PostgresVectorStore(BaseVectorStore):
         with self.pool.connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT id, username, role, groups, active FROM users WHERE api_key_hash = %s;",
+                    """
+                    SELECT id, username, role, org_id, home_unit_id, is_platform_admin, active
+                    FROM users WHERE api_key_hash = %s;
+                    """,
                     (key_hash,),
                 )
                 return cur.fetchone()
 
-    def list_users(self) -> List[Dict[str, Any]]:
+    def get_user(self, user_id: int) -> Optional[Dict[str, Any]]:
         self.connect()
         with self.pool.connection() as conn:
             with conn.cursor() as cur:
-                cur.execute("SELECT id, username, role, groups, active, created_at FROM users ORDER BY id;")
+                cur.execute(
+                    "SELECT id, username, role, org_id, home_unit_id, is_platform_admin, active FROM users WHERE id = %s;",
+                    (user_id,),
+                )
+                return cur.fetchone()
+
+    def list_users(self, org_id: int) -> List[Dict[str, Any]]:
+        self.connect()
+        with self.pool.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT id, username, role, home_unit_id, active, created_at
+                    FROM users WHERE org_id = %s ORDER BY id;
+                    """,
+                    (org_id,),
+                )
                 return cur.fetchall()
 
-    def set_user_active(self, user_id: int, active: bool) -> bool:
+    def set_user_active(self, user_id: int, active: bool, org_id: int) -> bool:
         self.connect()
         with self.pool.connection() as conn:
             with conn.cursor() as cur:
-                cur.execute("UPDATE users SET active = %s WHERE id = %s RETURNING id;", (active, user_id))
+                cur.execute("UPDATE users SET active = %s WHERE id = %s AND org_id = %s RETURNING id;",
+                            (active, user_id, org_id))
                 return cur.fetchone() is not None
 
-    def update_user(self, user_id: int, role: Optional[str] = None,
-                    groups: Optional[List[str]] = None, active: Optional[bool] = None) -> bool:
-        """Update role, groups, and/or active flag. Only provided fields are changed."""
-        self.connect()
-        fields, params = [], []
-        if role is not None:
-            fields.append("role = %s")
-            params.append(role)
-        if groups is not None:
-            fields.append("groups = %s")
-            params.append(groups)
-        if active is not None:
-            fields.append("active = %s")
-            params.append(active)
-        if not fields:
-            return True  # nothing to update
-        params.append(user_id)
-        with self.pool.connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    f"UPDATE users SET {', '.join(fields)} WHERE id = %s RETURNING id;",
-                    tuple(params),
-                )
-                return cur.fetchone() is not None
-
-    def delete_user(self, user_id: int) -> bool:
-        """Hard-delete a user. query_audits rows are kept for compliance (user_id becomes orphaned)."""
+    def delete_user(self, user_id: int, org_id: int) -> bool:
+        """Hard-delete a user within an org. query_audits rows are kept for compliance."""
         self.connect()
         with self.pool.connection() as conn:
             with conn.cursor() as cur:
-                cur.execute("DELETE FROM users WHERE id = %s RETURNING id;", (user_id,))
+                cur.execute("DELETE FROM users WHERE id = %s AND org_id = %s RETURNING id;", (user_id, org_id))
                 return cur.fetchone() is not None
 
-    def rotate_api_key(self, user_id: int, new_key_hash: str) -> bool:
-        """Replace a user's API key hash. The old key is immediately invalidated."""
+    def rotate_api_key(self, user_id: int, new_key_hash: str, org_id: int) -> bool:
         self.connect()
         with self.pool.connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "UPDATE users SET api_key_hash = %s WHERE id = %s RETURNING id;",
-                    (new_key_hash, user_id),
+                    "UPDATE users SET api_key_hash = %s WHERE id = %s AND org_id = %s RETURNING id;",
+                    (new_key_hash, user_id, org_id),
                 )
-                return cur.fetchone() is not None
-
-    def admin_exists(self) -> bool:
-        self.connect()
-        with self.pool.connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute("SELECT 1 FROM users WHERE role = 'admin' AND active LIMIT 1;")
                 return cur.fetchone() is not None
 
     def any_users_exist(self) -> bool:
@@ -256,6 +486,49 @@ class PostgresVectorStore(BaseVectorStore):
             with conn.cursor() as cur:
                 cur.execute("SELECT 1 FROM users LIMIT 1;")
                 return cur.fetchone() is not None
+
+    def platform_admin_exists(self) -> bool:
+        self.connect()
+        with self.pool.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1 FROM users WHERE is_platform_admin AND active LIMIT 1;")
+                return cur.fetchone() is not None
+
+    def create_platform_admin(self, username: str, api_key_hash: str) -> Dict[str, Any]:
+        """
+        Bootstraps the platform operator. Housed in a dedicated 'platform' org so
+        the users.org_id FK is satisfied; this account provisions customer orgs.
+        """
+        self.connect()
+        with self.pool.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT id FROM organizations WHERE slug = 'platform';")
+                row = cur.fetchone()
+                if row:
+                    plat_org = row["id"]
+                    cur.execute("SELECT id FROM org_units WHERE org_id = %s AND type = 'org' LIMIT 1;", (plat_org,))
+                    root_id = cur.fetchone()["id"]
+                else:
+                    cur.execute("INSERT INTO organizations (name, slug) VALUES ('Platform', 'platform') RETURNING id;")
+                    plat_org = cur.fetchone()["id"]
+                    cur.execute(
+                        "INSERT INTO org_units (org_id, parent_id, type, name, ancestor_ids) "
+                        "VALUES (%s, NULL, 'org', 'Platform', '{}') RETURNING id;",
+                        (plat_org,),
+                    )
+                    root_id = cur.fetchone()["id"]
+                    cur.execute("UPDATE org_units SET ancestor_ids = ARRAY[%s] WHERE id = %s;", (root_id, root_id))
+
+                cur.execute(
+                    """
+                    INSERT INTO users (username, api_key_hash, role, org_id, home_unit_id, is_platform_admin, active)
+                    VALUES (%s, %s, 'owner', %s, %s, TRUE, TRUE) RETURNING id;
+                    """,
+                    (username, api_key_hash, plat_org, root_id),
+                )
+                uid = cur.fetchone()["id"]
+            conn.commit()
+        return {"user_id": uid, "org_id": plat_org, "root_unit_id": root_id}
 
     # --------------------------------------------------------------- documents
 
@@ -266,20 +539,21 @@ class PostgresVectorStore(BaseVectorStore):
             "title": metadata.get("title"),
             "total_pages": metadata.get("total_pages"),
             "file_path": metadata.get("file_path"),
-            "allowed_groups": metadata.get("allowed_groups") or [],
+            "org_id": metadata.get("org_id"),
+            "unit_id": metadata.get("unit_id"),
             "uploaded_by": metadata.get("uploaded_by"),
         }
         with self.pool.connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    INSERT INTO documents (source, title, total_pages, file_path, allowed_groups, uploaded_by)
-                    VALUES (%(source)s, %(title)s, %(total_pages)s, %(file_path)s, %(allowed_groups)s, %(uploaded_by)s)
-                    ON CONFLICT (source) DO UPDATE SET
+                    INSERT INTO documents (source, title, total_pages, file_path, org_id, unit_id, uploaded_by)
+                    VALUES (%(source)s, %(title)s, %(total_pages)s, %(file_path)s, %(org_id)s, %(unit_id)s, %(uploaded_by)s)
+                    ON CONFLICT (org_id, source) DO UPDATE SET
                         title = EXCLUDED.title,
                         total_pages = EXCLUDED.total_pages,
                         file_path = EXCLUDED.file_path,
-                        allowed_groups = EXCLUDED.allowed_groups,
+                        unit_id = EXCLUDED.unit_id,
                         uploaded_by = COALESCE(EXCLUDED.uploaded_by, documents.uploaded_by)
                     RETURNING id;
                     """,
@@ -290,7 +564,8 @@ class PostgresVectorStore(BaseVectorStore):
                     raise ValueError("Failed to retrieve document ID after insert")
                 return row["id"]
 
-    def insert_chunks(self, document_id: int, chunks: List[Dict[str, Any]], embeddings: List[List[float]]):
+    def insert_chunks(self, document_id: int, chunks: List[Dict[str, Any]],
+                      embeddings: List[List[float]], org_id: int):
         """Replaces a document's chunks atomically using COPY (bulk load)."""
         if len(chunks) != len(embeddings):
             raise ValueError("chunks and embeddings length mismatch")
@@ -299,11 +574,12 @@ class PostgresVectorStore(BaseVectorStore):
             with conn.cursor() as cur:
                 cur.execute("DELETE FROM document_chunks WHERE document_id = %s", (document_id,))
                 with cur.copy(
-                    "COPY document_chunks (document_id, chunk_index, page_num, content, context, embedding) FROM STDIN"
+                    "COPY document_chunks (document_id, org_id, chunk_index, page_num, content, context, embedding) FROM STDIN"
                 ) as copy:
                     for chunk, embedding in zip(chunks, embeddings):
                         copy.write_row((
                             document_id,
+                            org_id,
                             chunk["chunk_index"],
                             chunk["page_num"],
                             chunk["text"],
@@ -317,7 +593,7 @@ class PostgresVectorStore(BaseVectorStore):
         with self.pool.connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT id, source, allowed_groups, uploaded_by FROM documents WHERE id = %s;",
+                    "SELECT id, source, org_id, unit_id, uploaded_by FROM documents WHERE id = %s;",
                     (document_id,),
                 )
                 return cur.fetchone()
@@ -330,25 +606,32 @@ class PostgresVectorStore(BaseVectorStore):
                 return cur.fetchone() is not None
 
     @staticmethod
-    def _group_visibility_sql(allowed_groups: Optional[List[str]], params: list, alias: str = "d") -> List[str]:
-        """None = unrestricted (admin). Otherwise: public docs OR group overlap."""
-        if allowed_groups is None:
-            return []
-        params.append(allowed_groups)
-        return [f"({alias}.allowed_groups = '{{}}' OR {alias}.allowed_groups && %s)"]
+    def _visibility_sql(org_id: int, visible_node_ids: Optional[List[int]], params: list,
+                        alias: str = "d") -> List[str]:
+        """
+        Tenant + hierarchy visibility, enforced in the WHERE clause (never
+        post-filtering). org_id always required. visible_node_ids None means
+        org-wide (owner/admin at the org root) — only the org_id filter applies.
+        """
+        clauses = [f"{alias}.org_id = %s"]
+        params.append(org_id)
+        if visible_node_ids is not None:
+            clauses.append(f"{alias}.unit_id = ANY(%s)")
+            params.append(visible_node_ids)
+        return clauses
 
-    def get_all_documents(self, limit: int = 100, offset: int = 0,
-                          allowed_groups: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+    def get_all_documents(self, org_id: int, visible_node_ids: Optional[List[int]] = None,
+                          limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
         self.connect()
         params: list = []
-        clauses = self._group_visibility_sql(allowed_groups, params)
-        where_sql = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        clauses = self._visibility_sql(org_id, visible_node_ids, params)
+        where_sql = "WHERE " + " AND ".join(clauses)
         params.extend([min(limit, 500), max(offset, 0)])
         with self.pool.connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     f"""
-                    SELECT id, source, title, total_pages, file_path, allowed_groups, created_at
+                    SELECT id, source, title, total_pages, file_path, unit_id, created_at
                     FROM documents d {where_sql} ORDER BY id DESC
                     LIMIT %s OFFSET %s
                     """,
@@ -356,11 +639,11 @@ class PostgresVectorStore(BaseVectorStore):
                 )
                 return cur.fetchall()
 
-    def list_sources(self, allowed_groups: Optional[List[str]] = None) -> List[str]:
+    def list_sources(self, org_id: int, visible_node_ids: Optional[List[int]] = None) -> List[str]:
         self.connect()
         params: list = []
-        clauses = self._group_visibility_sql(allowed_groups, params)
-        where_sql = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        clauses = self._visibility_sql(org_id, visible_node_ids, params)
+        where_sql = "WHERE " + " AND ".join(clauses)
         with self.pool.connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(f"SELECT source FROM documents d {where_sql};", tuple(params))
@@ -368,11 +651,9 @@ class PostgresVectorStore(BaseVectorStore):
 
     # ------------------------------------------------------------------ search
 
-    def _filter_sql(self, metadata_filter: Optional[Dict[str, Any]], params: list,
-                    allowed_groups: Optional[List[str]] = None) -> List[str]:
-        # RBAC visibility is part of the WHERE clause — retrieval-level
-        # enforcement, never post-filtering.
-        clauses = self._group_visibility_sql(allowed_groups, params)
+    def _filter_sql(self, org_id: int, visible_node_ids: Optional[List[int]],
+                    metadata_filter: Optional[Dict[str, Any]], params: list) -> List[str]:
+        clauses = self._visibility_sql(org_id, visible_node_ids, params)
         if metadata_filter:
             if "source_doc" in metadata_filter:
                 clauses.append("d.source ILIKE %s")
@@ -382,13 +663,14 @@ class PostgresVectorStore(BaseVectorStore):
                 params.append(metadata_filter["page_num"])
         return clauses
 
-    def dense_search(self, query_vector: List[float], top_k: int, metadata_filter: Dict[str, Any] = None,
-                     allowed_groups: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+    def dense_search(self, query_vector: List[float], top_k: int, org_id: int,
+                     visible_node_ids: Optional[List[int]] = None,
+                     metadata_filter: Dict[str, Any] = None) -> List[Dict[str, Any]]:
         self.connect()
         vec = _vec(query_vector)
         params: list = [vec]
-        where_clauses = self._filter_sql(metadata_filter, params, allowed_groups)
-        where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
+        where_clauses = self._filter_sql(org_id, visible_node_ids, metadata_filter, params)
+        where_sql = "WHERE " + " AND ".join(where_clauses)
         params.extend([vec, top_k])
 
         query_sql = f"""
@@ -412,15 +694,16 @@ class PostgresVectorStore(BaseVectorStore):
                 cur.execute(query_sql, tuple(params))
                 return cur.fetchall()
 
-    def lexical_search(self, query_text: str, top_k: int, metadata_filter: Dict[str, Any] = None,
-                       allowed_groups: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+    def lexical_search(self, query_text: str, top_k: int, org_id: int,
+                       visible_node_ids: Optional[List[int]] = None,
+                       metadata_filter: Dict[str, Any] = None) -> List[Dict[str, Any]]:
         self.connect()
         if not query_text.strip():
             return []
 
         params: list = [query_text, query_text]
         where_clauses = ["dc.content_tsvector @@ websearch_to_tsquery('english', %s)"]
-        where_clauses += self._filter_sql(metadata_filter, params, allowed_groups)
+        where_clauses += self._filter_sql(org_id, visible_node_ids, metadata_filter, params)
         where_sql = "WHERE " + " AND ".join(where_clauses)
         params.append(top_k)
 
@@ -469,6 +752,8 @@ class PostgresVectorStore(BaseVectorStore):
 
     def check_semantic_cache(self, query_embedding: List[float], similarity_threshold: float = 0.95,
                              access_key: str = "public") -> Any:
+        # access_key already encodes org_id + permission scope (see auth.compute_access_key),
+        # so cache hits can never cross tenants or permission sets.
         self.connect()
         vec = _vec(query_embedding)
         epoch = self.get_corpus_epoch()
@@ -502,23 +787,24 @@ class PostgresVectorStore(BaseVectorStore):
                 return None
 
     def add_to_semantic_cache(self, query_text: str, query_embedding: List[float], answer: str,
-                              citations: List[Dict[str, Any]], access_key: str = "public"):
+                              citations: List[Dict[str, Any]], org_id: int, access_key: str = "public"):
         self.connect()
         epoch = self.get_corpus_epoch()
         with self.pool.connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    INSERT INTO semantic_cache (query_text, query_embedding, answer, citations, corpus_epoch, access_key)
-                    VALUES (%s, %s::vector, %s, %s, %s, %s)
+                    INSERT INTO semantic_cache (query_text, query_embedding, answer, citations, corpus_epoch, access_key, org_id)
+                    VALUES (%s, %s::vector, %s, %s, %s, %s, %s)
                     ON CONFLICT (query_text, access_key) DO UPDATE SET
                         query_embedding = EXCLUDED.query_embedding,
                         answer = EXCLUDED.answer,
                         citations = EXCLUDED.citations,
                         corpus_epoch = EXCLUDED.corpus_epoch,
+                        org_id = EXCLUDED.org_id,
                         created_at = CURRENT_TIMESTAMP;
                     """,
-                    (query_text, _vec(query_embedding), answer, json.dumps(citations), epoch, access_key),
+                    (query_text, _vec(query_embedding), answer, json.dumps(citations), epoch, access_key, org_id),
                 )
             conn.commit()
 
@@ -540,18 +826,17 @@ class PostgresVectorStore(BaseVectorStore):
 
     # ------------------------------------------------------------- ingest jobs
 
-    def enqueue_ingest_job(self, filename: str, stored_path: str, enrich: bool = False,
-                           allowed_groups: Optional[List[str]] = None,
-                           uploaded_by: Optional[int] = None) -> int:
+    def enqueue_ingest_job(self, filename: str, stored_path: str, org_id: int, unit_id: int,
+                           enrich: bool = False, uploaded_by: Optional[int] = None) -> int:
         self.connect()
         with self.pool.connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    INSERT INTO ingest_jobs (filename, stored_path, enrich, status, allowed_groups, uploaded_by)
-                    VALUES (%s, %s, %s, 'queued', %s, %s) RETURNING id;
+                    INSERT INTO ingest_jobs (filename, stored_path, enrich, status, org_id, unit_id, uploaded_by)
+                    VALUES (%s, %s, %s, 'queued', %s, %s, %s) RETURNING id;
                     """,
-                    (filename, stored_path, enrich, allowed_groups or [], uploaded_by),
+                    (filename, stored_path, enrich, org_id, unit_id, uploaded_by),
                 )
                 return cur.fetchone()["id"]
 
@@ -567,7 +852,7 @@ class PostgresVectorStore(BaseVectorStore):
                         SELECT id FROM ingest_jobs WHERE status = 'queued'
                         ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1
                     )
-                    RETURNING id, filename, stored_path, enrich, allowed_groups, uploaded_by;
+                    RETURNING id, filename, stored_path, enrich, org_id, unit_id, uploaded_by;
                     """
                 )
                 row = cur.fetchone()
@@ -596,7 +881,7 @@ class PostgresVectorStore(BaseVectorStore):
                 cur.execute(
                     """
                     SELECT id, filename, enrich, status, error, chunks_count, document_id,
-                           allowed_groups, uploaded_by, created_at, started_at, finished_at
+                           org_id, unit_id, uploaded_by, created_at, started_at, finished_at
                     FROM ingest_jobs WHERE id = %s;
                     """,
                     (job_id,),
@@ -604,16 +889,16 @@ class PostgresVectorStore(BaseVectorStore):
                 return cur.fetchone()
 
     def save_query_audit(self, question: str, answer: str, score: float, faithful: bool, reason: str,
-                         user_id: Optional[int] = None):
+                         org_id: Optional[int] = None, user_id: Optional[int] = None):
         self.connect()
         with self.pool.connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    INSERT INTO query_audits (question, answer, faithfulness_score, faithful, reason, user_id)
-                    VALUES (%s, %s, %s, %s, %s, %s);
+                    INSERT INTO query_audits (question, answer, faithfulness_score, faithful, reason, org_id, user_id)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s);
                     """,
-                    (question, answer, score, faithful, reason, user_id),
+                    (question, answer, score, faithful, reason, org_id, user_id),
                 )
             conn.commit()
 

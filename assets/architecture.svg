@@ -1,0 +1,135 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 620" width="100%" height="100%">
+  <defs>
+    <linearGradient id="bg-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0b0f19" />
+      <stop offset="100%" stop-color="#030712" />
+    </linearGradient>
+    <linearGradient id="card-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1e293b" stop-opacity="0.8" />
+      <stop offset="100%" stop-color="#0f172a" stop-opacity="0.9" />
+    </linearGradient>
+    <linearGradient id="accent-cyan" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#06b6d4" />
+      <stop offset="100%" stop-color="#3b82f6" />
+    </linearGradient>
+    <linearGradient id="accent-emerald" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#10b981" />
+      <stop offset="100%" stop-color="#059669" />
+    </linearGradient>
+    <linearGradient id="accent-purple" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#8b5cf6" />
+      <stop offset="100%" stop-color="#ec4899" />
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="8" stdDeviation="6" flood-color="#000000" flood-opacity="0.5" />
+    </filter>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1000" height="620" fill="url(#bg-grad)" rx="16" />
+
+  <!-- Grid overlay -->
+  <path d="M 0,100 L 1000,100 M 0,200 L 1000,200 M 0,300 L 1000,300 M 0,400 L 1000,400 M 0,500 L 1000,500" stroke="#1e293b" stroke-width="0.5" opacity="0.3" />
+  <path d="M 200,0 L 200,620 M 400,0 L 400,620 M 600,0 L 600,620 M 800,0 L 800,620" stroke="#1e293b" stroke-width="0.5" opacity="0.3" />
+
+  <!-- Header -->
+  <text x="500" y="45" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="22" font-weight="700" fill="#f8fafc" letter-spacing="1">
+    PRODUCTION RAG - PIPELINE ARCHITECTURE
+  </text>
+  <text x="500" y="70" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="13" font-weight="400" fill="#94a3b8">
+    Enterprise Developer-Agnostic • Local-First • Hybrid Search • Multi-Tenant RBAC
+  </text>
+
+  <!-- Stage 1: Ingestion & Parsing -->
+  <g transform="translate(40, 100)" filter="url(#shadow)">
+    <rect width="270" height="480" rx="12" fill="url(#card-grad)" stroke="#334155" stroke-width="1" />
+    <rect x="16" y="16" width="238" height="32" rx="6" fill="#0369a1" fill-opacity="0.3" stroke="#0ea5e9" stroke-width="1" />
+    <text x="135" y="37" text-anchor="middle" font-family="sans-serif" font-size="13" font-weight="700" fill="#38bdf8">1. ASYNC INGESTION</text>
+
+    <!-- Sub-boxes -->
+    <rect x="20" y="65" width="230" height="75" rx="8" fill="#1e293b" stroke="#475569" stroke-width="0.8" />
+    <text x="32" y="88" font-family="sans-serif" font-size="12" font-weight="600" fill="#f1f5f9">Docling Multimodal Parser</text>
+    <text x="32" y="108" font-family="sans-serif" font-size="11" fill="#94a3b8">PDF Tables, OCR, Markdown, Code</text>
+    <text x="32" y="125" font-family="sans-serif" font-size="10" fill="#0ea5e9">Chunk Context Enrichment</text>
+
+    <rect x="20" y="155" width="230" height="75" rx="8" fill="#1e293b" stroke="#475569" stroke-width="0.8" />
+    <text x="32" y="178" font-family="sans-serif" font-size="12" font-weight="600" fill="#f1f5f9">Adaptive Chunker</text>
+    <text x="32" y="198" font-family="sans-serif" font-size="11" fill="#94a3b8">Semantic / Code / Page / Auto</text>
+    <text x="32" y="215" font-family="sans-serif" font-size="10" fill="#10b981">Zero Information Truncation</text>
+
+    <rect x="20" y="245" width="230" height="75" rx="8" fill="#1e293b" stroke="#475569" stroke-width="0.8" />
+    <text x="32" y="268" font-family="sans-serif" font-size="12" font-weight="600" fill="#f1f5f9">Local Embeddings</text>
+    <text x="32" y="288" font-family="sans-serif" font-size="11" fill="#94a3b8">FastEmbed ONNX (bge-small-en)</text>
+    <text x="32" y="305" font-family="sans-serif" font-size="10" fill="#a855f7">CPU-Optimized Batched Vector</text>
+
+    <rect x="20" y="335" width="230" height="120" rx="8" fill="#0f172a" stroke="#0ea5e9" stroke-width="1" />
+    <text x="32" y="358" font-family="sans-serif" font-size="12" font-weight="600" fill="#38bdf8">PostgreSQL + pgvector</text>
+    <text x="32" y="378" font-family="sans-serif" font-size="11" fill="#cbd5e1">• HNSW Vector Indexing</text>
+    <text x="32" y="398" font-family="sans-serif" font-size="11" fill="#cbd5e1">• GIN Full-Text Search (tsvector)</text>
+    <text x="32" y="418" font-family="sans-serif" font-size="11" fill="#cbd5e1">• Multi-Tenant RBAC Partitioning</text>
+    <text x="32" y="438" font-family="sans-serif" font-size="10" fill="#10b981">Bulk COPY Inserts &lt; 50ms</text>
+  </g>
+
+  <!-- Stage 2: Hybrid Retrieval & Fusion -->
+  <g transform="translate(365, 100)" filter="url(#shadow)">
+    <rect width="270" height="480" rx="12" fill="url(#card-grad)" stroke="#334155" stroke-width="1" />
+    <rect x="16" y="16" width="238" height="32" rx="6" fill="#065f46" fill-opacity="0.3" stroke="#10b981" stroke-width="1" />
+    <text x="135" y="37" text-anchor="middle" font-family="sans-serif" font-size="13" font-weight="700" fill="#34d399">2. HYBRID RETRIEVAL</text>
+
+    <rect x="20" y="65" width="230" height="75" rx="8" fill="#1e293b" stroke="#475569" stroke-width="0.8" />
+    <text x="32" y="88" font-family="sans-serif" font-size="12" font-weight="600" fill="#f1f5f9">Semantic Cache</text>
+    <text x="32" y="108" font-family="sans-serif" font-size="11" fill="#94a3b8">Vector Cosine Similarity &gt; 0.95</text>
+    <text x="32" y="125" font-family="sans-serif" font-size="10" fill="#34d399">Sub-15ms Instant Response</text>
+
+    <rect x="20" y="155" width="230" height="75" rx="8" fill="#1e293b" stroke="#475569" stroke-width="0.8" />
+    <text x="32" y="178" font-family="sans-serif" font-size="12" font-weight="600" fill="#f1f5f9">Query Transformation</text>
+    <text x="32" y="198" font-family="sans-serif" font-size="11" fill="#94a3b8">Multi-Query &amp; Follow-up Context</text>
+    <text x="32" y="215" font-family="sans-serif" font-size="10" fill="#38bdf8">Exact Token Regex Boosting</text>
+
+    <rect x="20" y="245" width="230" height="95" rx="8" fill="#1e293b" stroke="#475569" stroke-width="0.8" />
+    <text x="32" y="268" font-family="sans-serif" font-size="12" font-weight="600" fill="#f1f5f9">Weighted RRF Fusion</text>
+    <text x="32" y="288" font-family="sans-serif" font-size="11" fill="#94a3b8">Dense HNSW + Sparse BM25</text>
+    <text x="32" y="308" font-family="sans-serif" font-size="11" fill="#cbd5e1">Score = Σ [w / (rank + 60)]</text>
+    <text x="32" y="326" font-family="sans-serif" font-size="10" fill="#10b981">Top-20 Fused Candidates</text>
+
+    <rect x="20" y="355" width="230" height="100" rx="8" fill="#0f172a" stroke="#10b981" stroke-width="1" />
+    <text x="32" y="378" font-family="sans-serif" font-size="12" font-weight="600" fill="#34d399">Local Cross-Encoder Reranker</text>
+    <text x="32" y="398" font-family="sans-serif" font-size="11" fill="#cbd5e1">MS-MARCO MiniLM-L-6-v2</text>
+    <text x="32" y="418" font-family="sans-serif" font-size="11" fill="#cbd5e1">Deep Attention Joint Scoring</text>
+    <text x="32" y="438" font-family="sans-serif" font-size="10" fill="#38bdf8">Keeps Top-5 Highest Relevance</text>
+  </g>
+
+  <!-- Stage 3: Pluggable Generation & Guardrails -->
+  <g transform="translate(690, 100)" filter="url(#shadow)">
+    <rect width="270" height="480" rx="12" fill="url(#card-grad)" stroke="#334155" stroke-width="1" />
+    <rect x="16" y="16" width="238" height="32" rx="6" fill="#581c87" fill-opacity="0.3" stroke="#a855f7" stroke-width="1" />
+    <text x="135" y="37" text-anchor="middle" font-family="sans-serif" font-size="13" font-weight="700" fill="#c084fc">3. SYNTHESIS &amp; GUARDRAILS</text>
+
+    <rect x="20" y="65" width="230" height="145" rx="8" fill="#1e293b" stroke="#475569" stroke-width="0.8" />
+    <text x="32" y="88" font-family="sans-serif" font-size="12" font-weight="600" fill="#f1f5f9">Pluggable LLM Generators</text>
+    <text x="32" y="108" font-family="sans-serif" font-size="11" fill="#cbd5e1">• Ollama (100% Offline)</text>
+    <text x="32" y="128" font-family="sans-serif" font-size="11" fill="#cbd5e1">• OpenAI / vLLM / DeepSeek</text>
+    <text x="32" y="148" font-family="sans-serif" font-size="11" fill="#cbd5e1">• Anthropic Claude 3.5</text>
+    <text x="32" y="168" font-family="sans-serif" font-size="11" fill="#cbd5e1">• Google Gemini 2.5 Flash</text>
+    <text x="32" y="193" font-family="sans-serif" font-size="10" fill="#a855f7">Swap via GENERATION_PROVIDER</text>
+
+    <rect x="20" y="225" width="230" height="110" rx="8" fill="#1e293b" stroke="#475569" stroke-width="0.8" />
+    <text x="32" y="248" font-family="sans-serif" font-size="12" font-weight="600" fill="#f1f5f9">Grounded Citations</text>
+    <text x="32" y="268" font-family="sans-serif" font-size="11" fill="#94a3b8">Active inline citation markers [1], [2]</text>
+    <text x="32" y="288" font-family="sans-serif" font-size="11" fill="#94a3b8">Verified source &amp; page mapping</text>
+    <text x="32" y="313" font-family="sans-serif" font-size="10" fill="#10b981">Strict Prompt Injection Defense</text>
+
+    <rect x="20" y="350" width="230" height="105" rx="8" fill="#0f172a" stroke="#a855f7" stroke-width="1" />
+    <text x="32" y="373" font-family="sans-serif" font-size="12" font-weight="600" fill="#c084fc">Faithfulness Audit Engine</text>
+    <text x="32" y="393" font-family="sans-serif" font-size="11" fill="#cbd5e1">Local Cross-Encoder Grounding</text>
+    <text x="32" y="413" font-family="sans-serif" font-size="11" fill="#cbd5e1">Auto Hallucination Flagging</text>
+    <text x="32" y="433" font-family="sans-serif" font-size="10" fill="#34d399">Self-Correcting Reliability</text>
+  </g>
+
+  <!-- Connectors -->
+  <path d="M 310,340 L 365,340" stroke="#0ea5e9" stroke-width="2" stroke-dasharray="4" />
+  <polygon points="365,340 357,336 357,344" fill="#0ea5e9" />
+
+  <path d="M 635,340 L 690,340" stroke="#10b981" stroke-width="2" stroke-dasharray="4" />
+  <polygon points="690,340 682,336 682,344" fill="#10b981" />
+</svg>

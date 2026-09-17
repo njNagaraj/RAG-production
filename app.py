@@ -28,8 +28,8 @@ from pipeline.reranker import get_reranker
 from pipeline.router import QueryRouter
 from pipeline.tracer import Tracer
 from pipeline.auth import (
-    CurrentUser, get_current_user, require_role, generate_api_key, hash_key,
-    compute_access_key, bootstrap_admin, invalidate_user_cache,
+    CurrentUser, get_current_user, require_org_admin, require_platform_admin,
+    generate_api_key, hash_key, compute_access_key, bootstrap_platform_admin, invalidate_user_cache,
 )
 
 logger = logging.getLogger("rag.api")
@@ -58,7 +58,7 @@ async def lifespan(app: FastAPI):
     try:
         vector_store = get_vector_store()
         vector_store.initialize_db(dimension=embedder.dimension)
-        bootstrap_admin()
+        bootstrap_platform_admin()
         app.state.router = QueryRouter()  # embeds seed examples once
         app.state.db_ready = True
     except Exception as e:
@@ -116,13 +116,30 @@ class QueryRequest(BaseModel):
 
 class CreateUserRequest(BaseModel):
     username: str = Field(min_length=2, max_length=100, pattern=r"^[\w.\-]+$")
-    role: str = Field(pattern=r"^(admin|editor|viewer)$")
-    groups: List[str] = []
+    role: str = Field(pattern=r"^(owner|admin|editor|viewer)$")
+    # Node the user's initial role is granted at (default: caller's home unit / org root)
+    unit_id: Optional[int] = None
 
 class UpdateUserRequest(BaseModel):
     active: Optional[bool] = None
-    role: Optional[str] = Field(None, pattern=r"^(admin|editor|viewer)$")
-    groups: Optional[List[str]] = None
+
+class CreateOrgRequest(BaseModel):
+    name: str = Field(min_length=2, max_length=200)
+    slug: str = Field(min_length=2, max_length=100, pattern=r"^[a-z0-9\-]+$")
+    owner_username: str = Field(min_length=2, max_length=100, pattern=r"^[\w.\-]+$")
+
+class CreateUnitRequest(BaseModel):
+    parent_id: int
+    type: str = Field(pattern=r"^(department|team)$")
+    name: str = Field(min_length=1, max_length=200)
+
+class UpdateUnitRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+
+class RoleAssignmentRequest(BaseModel):
+    user_id: int
+    unit_id: int
+    role: str = Field(pattern=r"^(owner|admin|editor|viewer)$")
 
 # ------------------------------------------------------------------- endpoints
 
@@ -151,7 +168,7 @@ def ready():
         return JSONResponse(status_code=503, content={"status": "not_ready"})
 
 @app.get("/metrics")
-def metrics(user: CurrentUser = Depends(require_role("admin"))):
+def metrics(user: CurrentUser = Depends(require_org_admin)):
     if not METRICS:
         raise HTTPException(status_code=404, detail="prometheus-client not installed")
     try:
@@ -162,78 +179,172 @@ def metrics(user: CurrentUser = Depends(require_role("admin"))):
 
 @app.get("/api/me")
 def whoami(user: CurrentUser = Depends(get_current_user)):
-    return {"id": user.id, "username": user.username, "role": user.role, "groups": user.groups}
+    return {
+        "id": user.id, "username": user.username, "org_id": user.org_id,
+        "home_unit_id": user.home_unit_id, "role": user.role,
+        "is_platform_admin": user.is_platform_admin, "org_wide": user.org_wide,
+        "assignments": user.assignments,
+        "can_upload": user.org_wide or bool(user.write_unit_ids),
+        "write_unit_ids": user.write_unit_ids,
+    }
 
 @app.get("/api/documents")
 def list_documents(limit: int = 100, offset: int = 0, user: CurrentUser = Depends(get_current_user)):
-    return get_vector_store().get_all_documents(limit=limit, offset=offset,
-                                                allowed_groups=user.retrieval_groups())
+    return get_vector_store().get_all_documents(org_id=user.org_id,
+                                                visible_node_ids=user.visible_node_ids,
+                                                limit=limit, offset=offset)
 
 @app.delete("/api/documents/{document_id}")
-def delete_document(document_id: int, user: CurrentUser = Depends(require_role("admin", "editor"))):
+def delete_document(document_id: int, user: CurrentUser = Depends(get_current_user)):
     store = get_vector_store()
     doc = store.get_document(document_id)
-    if not doc:
+    if not doc or doc["org_id"] != user.org_id:
         raise HTTPException(status_code=404, detail="Document not found")
-    if not user.is_admin and doc["uploaded_by"] != user.id:
-        raise HTTPException(status_code=403, detail="Editors can only delete their own documents")
+    # Deletable by org admins, managers of the doc's unit, or the uploader.
+    if not (user.can_manage(doc["unit_id"]) or doc["uploaded_by"] == user.id):
+        raise HTTPException(status_code=403, detail="Not authorized to delete this document")
     store.delete_document(document_id)
     store.bump_corpus_epoch()
     logger.info("Document %d (%s) deleted by %s", document_id, doc["source"], user.username)
     return {"status": "deleted", "id": document_id}
 
+# ---------------------------------------------------------- org provisioning
+
+@app.post("/api/orgs", status_code=201)
+def create_org(req: CreateOrgRequest, user: CurrentUser = Depends(require_platform_admin)):
+    api_key = generate_api_key()
+    try:
+        ids = get_vector_store().create_organization(req.name, req.slug, req.owner_username, hash_key(api_key))
+    except Exception:
+        raise HTTPException(status_code=409, detail="Organization slug or owner username already exists")
+    invalidate_user_cache()
+    logger.info("Org %s (slug=%s) provisioned by %s", req.name, req.slug, user.username)
+    # Owner key shown exactly once.
+    return {"org_id": ids["org_id"], "root_unit_id": ids["root_unit_id"],
+            "owner_username": req.owner_username, "owner_api_key": api_key}
+
+# ----------------------------------------------------------------- hierarchy
+
+@app.get("/api/units")
+def list_units(user: CurrentUser = Depends(get_current_user)):
+    return get_vector_store().get_unit_tree(user.org_id)
+
+@app.post("/api/units", status_code=201)
+def create_unit(req: CreateUnitRequest, user: CurrentUser = Depends(get_current_user)):
+    store = get_vector_store()
+    parent = store.get_unit(req.parent_id)
+    if not parent or parent["org_id"] != user.org_id:
+        raise HTTPException(status_code=404, detail="Parent unit not found")
+    if not user.can_manage(req.parent_id):
+        raise HTTPException(status_code=403, detail="Requires admin authority over the parent unit")
+    unit_id = store.create_unit(user.org_id, req.parent_id, req.type, req.name)
+    invalidate_user_cache()
+    logger.info("Unit %d (%s '%s') created under %d by %s", unit_id, req.type, req.name, req.parent_id, user.username)
+    return {"id": unit_id, "parent_id": req.parent_id, "type": req.type, "name": req.name}
+
+@app.patch("/api/units/{unit_id}")
+def rename_unit(unit_id: int, req: UpdateUnitRequest, user: CurrentUser = Depends(get_current_user)):
+    if not user.can_manage(unit_id):
+        raise HTTPException(status_code=403, detail="Requires admin authority over this unit")
+    if not get_vector_store().update_unit(unit_id, user.org_id, req.name):
+        raise HTTPException(status_code=404, detail="Unit not found")
+    invalidate_user_cache()
+    return {"id": unit_id, "name": req.name}
+
+@app.delete("/api/units/{unit_id}", status_code=204)
+def delete_unit(unit_id: int, user: CurrentUser = Depends(get_current_user)):
+    if not user.can_manage(unit_id):
+        raise HTTPException(status_code=403, detail="Requires admin authority over this unit")
+    try:
+        ok = get_vector_store().delete_unit(unit_id, user.org_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not ok:
+        raise HTTPException(status_code=404, detail="Unit not found")
+    invalidate_user_cache()
+
+# ----------------------------------------------------- role assignments
+
+@app.post("/api/role-assignments", status_code=201)
+def add_role_assignment(req: RoleAssignmentRequest, user: CurrentUser = Depends(get_current_user)):
+    store = get_vector_store()
+    if not user.can_manage(req.unit_id):
+        raise HTTPException(status_code=403, detail="Requires admin authority over the target unit")
+    target = store.get_user(req.user_id)
+    if not target or target["org_id"] != user.org_id:
+        raise HTTPException(status_code=404, detail="User not found in this organization")
+    unit = store.get_unit(req.unit_id)
+    if not unit or unit["org_id"] != user.org_id:
+        raise HTTPException(status_code=404, detail="Unit not found")
+    rid = store.add_role_assignment(user.org_id, req.user_id, req.unit_id, req.role)
+    invalidate_user_cache()
+    logger.info("Role %s granted to user %d at unit %d by %s", req.role, req.user_id, req.unit_id, user.username)
+    return {"id": rid, "user_id": req.user_id, "unit_id": req.unit_id, "role": req.role}
+
+@app.delete("/api/role-assignments/{assignment_id}", status_code=204)
+def remove_role_assignment(assignment_id: int, user: CurrentUser = Depends(require_org_admin)):
+    if not get_vector_store().remove_role_assignment(assignment_id, user.org_id):
+        raise HTTPException(status_code=404, detail="Assignment not found")
+    invalidate_user_cache()
+
 # ------------------------------------------------------------- user management
 
 @app.post("/api/users", status_code=201)
-def create_user(req: CreateUserRequest, user: CurrentUser = Depends(require_role("admin"))):
+def create_user(req: CreateUserRequest, user: CurrentUser = Depends(get_current_user)):
+    store = get_vector_store()
+    # Grant the initial role at the requested unit (default: caller's home / org root)
+    unit_id = req.unit_id or user.home_unit_id or store.get_org_root_unit(user.org_id)
+    if not user.can_manage(unit_id):
+        raise HTTPException(status_code=403, detail="Requires admin authority over the target unit")
     api_key = generate_api_key()
     try:
-        user_id = get_vector_store().create_user(req.username, hash_key(api_key), req.role,
-                                                 [g.strip() for g in req.groups if g.strip()])
+        user_id = store.create_user(req.username, hash_key(api_key), req.role, user.org_id, unit_id)
+        store.add_role_assignment(user.org_id, user_id, unit_id, req.role)
     except Exception:
-        raise HTTPException(status_code=409, detail="Username already exists")
+        raise HTTPException(status_code=409, detail="Username already exists in this organization")
     invalidate_user_cache()
-    logger.info("User %s (%s) created by %s", req.username, req.role, user.username)
-    # The plaintext key is returned exactly once — it is stored only as a hash.
+    logger.info("User %s (%s @unit %d) created by %s", req.username, req.role, unit_id, user.username)
+    # Plaintext key returned exactly once — stored only as a hash.
     return {"id": user_id, "username": req.username, "role": req.role,
-            "groups": req.groups, "api_key": api_key}
+            "unit_id": unit_id, "api_key": api_key}
 
 @app.get("/api/users")
-def list_users(user: CurrentUser = Depends(require_role("admin"))):
-    return get_vector_store().list_users()
+def list_users(user: CurrentUser = Depends(require_org_admin)):
+    return get_vector_store().list_users(user.org_id)
 
 @app.patch("/api/users/{user_id}")
-def update_user(user_id: int, req: UpdateUserRequest, user: CurrentUser = Depends(require_role("admin"))):
+def update_user(user_id: int, req: UpdateUserRequest, user: CurrentUser = Depends(require_org_admin)):
     store = get_vector_store()
-    updated = store.update_user(
-        user_id,
-        role=req.role,
-        groups=[g.strip() for g in req.groups if g.strip()] if req.groups is not None else None,
-        active=req.active,
-    )
-    if not updated:
+    target = store.get_user(user_id)
+    if not target or target["org_id"] != user.org_id:
         raise HTTPException(status_code=404, detail="User not found")
+    if req.active is not None:
+        store.set_user_active(user_id, req.active, user.org_id)
     invalidate_user_cache()
-    logger.info("User %d updated by %s (role=%s groups=%s active=%s)",
-                user_id, user.username, req.role, req.groups, req.active)
-    return {"id": user_id, "role": req.role, "groups": req.groups, "active": req.active}
+    logger.info("User %d updated by %s (active=%s)", user_id, user.username, req.active)
+    return {"id": user_id, "active": req.active}
 
 @app.delete("/api/users/{user_id}", status_code=204)
-def delete_user_endpoint(user_id: int, user: CurrentUser = Depends(require_role("admin"))):
+def delete_user_endpoint(user_id: int, user: CurrentUser = Depends(require_org_admin)):
     if user.id == user_id:
         raise HTTPException(status_code=400, detail="Cannot delete your own account")
-    if not get_vector_store().delete_user(user_id):
+    if not get_vector_store().delete_user(user_id, user.org_id):
         raise HTTPException(status_code=404, detail="User not found")
     invalidate_user_cache()
     logger.info("User %d deleted by %s", user_id, user.username)
 
 @app.post("/api/users/{user_id}/rotate-key")
 def rotate_key(user_id: int, user: CurrentUser = Depends(get_current_user)):
-    """Users can rotate their own key; admins can rotate anyone's key."""
-    if not user.is_admin and user.id != user_id:
-        raise HTTPException(status_code=403, detail="Cannot rotate another user's key")
+    """Users can rotate their own key; org admins can rotate anyone's in their org."""
+    store = get_vector_store()
+    if user.id != user_id:
+        if not user.is_org_admin:
+            raise HTTPException(status_code=403, detail="Cannot rotate another user's key")
+        target = store.get_user(user_id)
+        if not target or target["org_id"] != user.org_id:
+            raise HTTPException(status_code=404, detail="User not found")
     new_key = generate_api_key()
-    if not get_vector_store().rotate_api_key(user_id, hash_key(new_key)):
+    if not store.rotate_api_key(user_id, hash_key(new_key), user.org_id):
         raise HTTPException(status_code=404, detail="User not found")
     invalidate_user_cache()
     logger.info("API key rotated for user %d by %s", user_id, user.username)
@@ -251,15 +362,23 @@ def _sanitize_filename(name: str) -> str:
 @app.post("/api/ingest", status_code=202)
 @limiter.limit(settings.rate_limit_ingest)
 def ingest_endpoint(request: Request, file: UploadFile = File(...), enrich: bool = Form(False),
-                    groups: str = Form(""),
-                    user: CurrentUser = Depends(require_role("admin", "editor"))):
+                    unit_id: Optional[int] = Form(None),
+                    user: CurrentUser = Depends(get_current_user)):
     """
-    Saves the upload and enqueues an ingestion job; the worker container does
-    the heavy lifting. Returns immediately with a job id to poll.
-    `groups`: comma-separated access groups; empty = visible to everyone.
+    Saves the upload and enqueues an ingestion job; the worker does the heavy
+    lifting. Returns a job id to poll. `unit_id` attaches the document to a
+    hierarchy node (default: caller's home unit); the doc is then visible to
+    that node and everything under it. Requires write authority over the unit.
     """
+    store = get_vector_store()
+    target_unit = unit_id or user.home_unit_id or store.get_org_root_unit(user.org_id)
+    unit = store.get_unit(target_unit)
+    if not unit or unit["org_id"] != user.org_id:
+        raise HTTPException(status_code=404, detail="Target unit not found")
+    if not user.can_write(target_unit):
+        raise HTTPException(status_code=403, detail="Requires editor authority over the target unit")
+
     filename = _sanitize_filename(file.filename)
-    allowed_groups = [g.strip() for g in groups.split(",") if g.strip()]
     os.makedirs(settings.upload_dir, exist_ok=True)
     stored_path = os.path.join(settings.upload_dir, f"{uuid.uuid4().hex}_{filename}")
 
@@ -280,13 +399,12 @@ def ingest_endpoint(request: Request, file: UploadFile = File(...), enrich: bool
             os.remove(stored_path)
         raise
 
-    job_id = get_vector_store().enqueue_ingest_job(filename, stored_path, enrich,
-                                                   allowed_groups=allowed_groups,
-                                                   uploaded_by=user.id)
+    job_id = store.enqueue_ingest_job(filename, stored_path, org_id=user.org_id, unit_id=target_unit,
+                                      enrich=enrich, uploaded_by=user.id)
     if METRICS:
         METRICS["ingest_jobs"].inc()
-    logger.info("Enqueued ingest job %d for %s (%d bytes, groups=%s, by=%s)",
-                job_id, filename, written, allowed_groups, user.username)
+    logger.info("Enqueued ingest job %d for %s (%d bytes, unit=%s, by=%s)",
+                job_id, filename, written, target_unit, user.username)
     return {
         "status": "queued",
         "message": f"Ingestion of {filename} queued.",
@@ -296,18 +414,20 @@ def ingest_endpoint(request: Request, file: UploadFile = File(...), enrich: bool
 @app.get("/api/jobs/{job_id}")
 def get_job(job_id: int, user: CurrentUser = Depends(get_current_user)):
     job = get_vector_store().get_ingest_job(job_id)
-    if not job:
+    if not job or job.get("org_id") not in (None, user.org_id):
         raise HTTPException(status_code=404, detail="Job not found")
-    if not user.is_admin and job.get("uploaded_by") not in (None, user.id):
+    if not user.is_org_admin and job.get("uploaded_by") not in (None, user.id):
         raise HTTPException(status_code=404, detail="Job not found")
     return job
 
-def _background_audit(question: str, answer: str, chunks: List[Dict], user_id: Optional[int] = None):
+def _background_audit(question: str, answer: str, chunks: List[Dict],
+                      org_id: Optional[int] = None, user_id: Optional[int] = None):
     """Local faithfulness audit — runs after the response is returned."""
     try:
         evaluator = Evaluator()
         res = evaluator.evaluate_faithfulness(question, answer, chunks)
-        get_vector_store().save_query_audit(question, answer, res.score, res.faithful, res.reason, user_id=user_id)
+        get_vector_store().save_query_audit(question, answer, res.score, res.faithful, res.reason,
+                                            org_id=org_id, user_id=user_id)
         logger.info("Audit: score=%.2f faithful=%s", res.score, res.faithful)
     except Exception as e:
         logger.warning("Background audit failed: %s", e)
@@ -342,8 +462,10 @@ def query_pipeline(request: Request, req: QueryRequest, background_tasks: Backgr
 
 def _run_query(req: QueryRequest, tracer: Tracer, background_tasks: BackgroundTasks, user: CurrentUser):
     router = app.state.router or QueryRouter()
-    # RBAC context: None = unrestricted (admin); list = group-filtered retrieval
-    allowed_groups = user.retrieval_groups()
+    # RBAC context: org_id isolates the tenant; visible_node_ids (None = org-wide)
+    # restricts document visibility through the hierarchy; access_key scopes cache.
+    org_id = user.org_id
+    visible_node_ids = user.visible_node_ids
     access_key = compute_access_key(user)
 
     # 0. Query routing — local embedding-similarity classifier
@@ -400,7 +522,8 @@ def _run_query(req: QueryRequest, tracer: Tracer, background_tasks: BackgroundTa
 
     # 2. Local adaptive transform + hybrid retrieval + weighted RRF (group-filtered in SQL)
     retrieve_step = tracer.start_step("Retrieval & Fusion", "Adaptive transform (local rules) + dense + FTS + weighted RRF")
-    chunks, debug_info = retriever.retrieve(req.question, req.history, allowed_groups=allowed_groups)
+    chunks, debug_info = retriever.retrieve(req.question, req.history, org_id=org_id,
+                                            visible_node_ids=visible_node_ids)
     retrieve_step.finish({
         "standalone_query": debug_info["standalone_query"],
         "query_type": debug_info["query_type"],
@@ -421,13 +544,13 @@ def _run_query(req: QueryRequest, tracer: Tracer, background_tasks: BackgroundTa
     generate_step.finish({"citations_count": len(citations)})
 
     # 5. Faithfulness audit — local cross-encoder, after response (background)
-    background_tasks.add_task(_background_audit, req.question, answer, reranked_chunks, user.id)
+    background_tasks.add_task(_background_audit, req.question, answer, reranked_chunks, org_id, user.id)
 
-    # 6. Cache write (scoped to this permission set)
+    # 6. Cache write (scoped to this tenant + permission set)
     write_step = tracer.start_step("Semantic Cache Write", "Save query embedding and answer (current corpus epoch)")
     try:
         vector_store.add_to_semantic_cache(req.question, query_embedding, answer, citations,
-                                           access_key=access_key)
+                                           org_id=org_id, access_key=access_key)
         write_step.finish({"success": True})
     except Exception as cache_err:
         write_step.finish({"success": False, "error": str(cache_err)})

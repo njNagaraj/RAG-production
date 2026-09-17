@@ -52,9 +52,11 @@
                 </label>
                 <span class="tooltip" title="Enriches each chunk with global document context using Gemini to increase retrieval accuracy.">?</span>
             </div>
-            <div class="option-row" id="groups-row">
-                <input type="text" id="groups-input" placeholder="Access groups (e.g. finance,hr) — empty = everyone"
-                       style="width:100%; padding:6px 8px; font-size:12px; background:transparent; border:1px solid rgba(255,255,255,0.15); border-radius:6px; color:inherit;">
+            <div class="option-row" id="unit-row">
+                <select id="unit-select" title="Attach the document to a team/department; it becomes visible to that node and everything under it"
+                        style="width:100%; padding:6px 8px; font-size:12px; background:transparent; border:1px solid rgba(255,255,255,0.15); border-radius:6px; color:inherit;">
+                    <option value="">Attach to: (my home unit)</option>
+                </select>
             </div>
 
             <button class="btn btn-primary btn-block" id="upload-btn" disabled>Upload & Process</button>
@@ -130,7 +132,7 @@
             <header class="chat-header">
                 <div class="header-info">
                     <h1>User Management</h1>
-                    <p>Create, edit and manage users, roles and access groups</p>
+                    <p>Create and manage users within your organization</p>
                 </div>
                 <button class="btn btn-primary" id="create-user-btn" onclick="openCreateModal()">
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
@@ -150,7 +152,7 @@
                             <tr>
                                 <th>Username</th>
                                 <th>Role</th>
-                                <th>Groups</th>
+                                <th>Home Unit</th>
                                 <th>Status</th>
                                 <th>Created</th>
                                 <th>Actions</th>
@@ -189,10 +191,11 @@
                 <select class="um-input" id="cm-role">
                     <option value="viewer">viewer — read-only queries</option>
                     <option value="editor">editor — upload + query</option>
-                    <option value="admin">admin — full access</option>
+                    <option value="admin">admin — manage unit + below</option>
+                    <option value="owner">owner — full org control</option>
                 </select>
-                <label class="um-label">Access Groups <span style="color:var(--text-secondary);font-weight:400">(comma-separated, empty = public)</span></label>
-                <input class="um-input" id="cm-groups" type="text" placeholder="hr,finance">
+                <label class="um-label">Assign at unit <span style="color:var(--text-secondary);font-weight:400">(role scope; empty = my home unit)</span></label>
+                <select class="um-input" id="cm-unit"><option value="">(my home unit)</option></select>
             </div>
             <div class="um-card-footer">
                 <button class="btn btn-secondary" onclick="document.getElementById('create-modal').style.display='none'">Cancel</button>
@@ -210,14 +213,9 @@
             </div>
             <div class="um-card-body">
                 <input type="hidden" id="em-user-id">
-                <label class="um-label">Role</label>
-                <select class="um-input" id="em-role">
-                    <option value="viewer">viewer</option>
-                    <option value="editor">editor</option>
-                    <option value="admin">admin</option>
-                </select>
-                <label class="um-label">Access Groups</label>
-                <input class="um-input" id="em-groups" type="text" placeholder="hr,finance">
+                <p style="font-size:12px;color:var(--text-secondary);margin:0 0 12px">
+                    Roles are managed per unit via role assignments. This panel toggles account access.
+                </p>
                 <div class="um-toggle-row">
                     <span class="um-label" style="margin:0">Active</span>
                     <label class="um-toggle">
@@ -341,17 +339,36 @@
                 if (!res.ok) return;
                 currentUser = await res.json();
                 userBadge.style.display = 'flex';
-                userBadgeText.textContent = `👤 ${currentUser.username} · ${currentUser.role}`;
-                const canUpload = currentUser.role === 'admin' || currentUser.role === 'editor';
+                const scope = currentUser.org_wide ? 'org-wide' : (currentUser.role || 'member');
+                userBadgeText.textContent = `👤 ${currentUser.username} · ${scope}`;
+                const canUpload = !!currentUser.can_upload;
                 document.getElementById('ingest-title').style.display = canUpload ? '' : 'none';
                 dropZone.style.display = canUpload ? '' : 'none';
                 uploadBtn.style.display = canUpload ? '' : 'none';
-                groupsRow.style.display = canUpload ? '' : 'none';
+                document.getElementById('unit-row').style.display = canUpload ? '' : 'none';
                 document.querySelector('.option-row').style.display = canUpload ? '' : 'none';
-                // Show admin tab only for admins
-                if (currentUser.role === 'admin') {
+                if (canUpload) loadUnits();
+                // User-management tab only for org admins/owners
+                if (currentUser.org_wide) {
                     document.getElementById('admin-tab-wrap').style.display = 'block';
                 }
+            } catch (err) { console.error(err); }
+        }
+
+        async function loadUnits() {
+            try {
+                const res = await authFetch('/api/units');
+                if (!res.ok) return;
+                const units = await res.json();
+                const sel = document.getElementById('unit-select');
+                sel.innerHTML = '<option value="">Attach to: (my home unit)</option>';
+                units.forEach(u => {
+                    const depth = (u.ancestor_ids ? u.ancestor_ids.length : 1) - 1;
+                    const opt = document.createElement('option');
+                    opt.value = u.id;
+                    opt.textContent = `${'  '.repeat(depth)}${u.name} (${u.type})`;
+                    sel.appendChild(opt);
+                });
             } catch (err) { console.error(err); }
         }
 
@@ -394,12 +411,12 @@
                 tbody.innerHTML = '<tr><td colspan="6" class="table-empty">No users found.</td></tr>';
                 return;
             }
-            const roleColors = { admin: '#a78bfa', editor: '#60a5fa', viewer: '#9ca3af' };
+            const roleColors = { owner: '#f472b6', admin: '#a78bfa', editor: '#60a5fa', viewer: '#9ca3af' };
             tbody.innerHTML = users.map(u => `
                 <tr id="user-row-${u.id}">
                     <td><strong>${u.username}</strong></td>
                     <td><span class="role-badge" style="background:${roleColors[u.role] || '#9ca3af'}22;color:${roleColors[u.role] || '#9ca3af'};border:1px solid ${roleColors[u.role] || '#9ca3af'}44">${u.role}</span></td>
-                    <td>${u.groups && u.groups.length ? u.groups.map(g => `<span class="group-tag">${g}</span>`).join('') : '<span style="color:var(--text-secondary);font-size:12px">public</span>'}</td>
+                    <td><span style="color:var(--text-secondary);font-size:12px">unit ${u.home_unit_id ?? '—'}</span></td>
                     <td><span class="status-pill ${u.active ? 'active' : 'inactive'}">${u.active ? 'Active' : 'Inactive'}</span></td>
                     <td style="color:var(--text-secondary);font-size:12px">${new Date(u.created_at).toLocaleDateString()}</td>
                     <td>
@@ -429,23 +446,38 @@
         document.addEventListener('click', closeKebab);
 
         // --- Create User ---
-        function openCreateModal() {
+        async function openCreateModal() {
             document.getElementById('cm-username').value = '';
             document.getElementById('cm-role').value = 'viewer';
-            document.getElementById('cm-groups').value = '';
+            // Populate the unit dropdown from the org tree
+            try {
+                const res = await authFetch('/api/units');
+                const units = res.ok ? await res.json() : [];
+                const sel = document.getElementById('cm-unit');
+                sel.innerHTML = '<option value="">(my home unit)</option>';
+                units.forEach(u => {
+                    const depth = (u.ancestor_ids ? u.ancestor_ids.length : 1) - 1;
+                    const opt = document.createElement('option');
+                    opt.value = u.id;
+                    opt.textContent = `${'  '.repeat(depth)}${u.name} (${u.type})`;
+                    sel.appendChild(opt);
+                });
+            } catch (_) {}
             document.getElementById('create-modal').style.display = 'flex';
         }
 
         async function submitCreateUser() {
             const username = document.getElementById('cm-username').value.trim();
             const role = document.getElementById('cm-role').value;
-            const groups = document.getElementById('cm-groups').value.split(',').map(g=>g.trim()).filter(Boolean);
+            const unitVal = document.getElementById('cm-unit').value;
             if (!username) { alert('Username is required.'); return; }
+            const body = { username, role };
+            if (unitVal) body.unit_id = parseInt(unitVal);
             try {
                 const res = await authFetch('/api/users', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ username, role, groups })
+                    body: JSON.stringify(body)
                 });
                 if (!res.ok) { const e = await res.json(); alert(e.detail || 'Error creating user'); return; }
                 const data = await res.json();
@@ -455,28 +487,24 @@
             } catch(e) { alert('Network error'); }
         }
 
-        // --- Edit User ---
+        // --- Edit User (account active toggle; roles are managed via role assignments) ---
         function openEditModal(uid) {
             const u = allUsers.find(x => x.id === uid);
             if (!u) return;
             document.getElementById('em-user-id').value = uid;
             document.getElementById('em-username-label').textContent = u.username;
-            document.getElementById('em-role').value = u.role;
-            document.getElementById('em-groups').value = (u.groups || []).join(',');
             document.getElementById('em-active').checked = u.active;
             document.getElementById('edit-modal').style.display = 'flex';
         }
 
         async function submitEditUser() {
             const uid = parseInt(document.getElementById('em-user-id').value);
-            const role = document.getElementById('em-role').value;
-            const groups = document.getElementById('em-groups').value.split(',').map(g=>g.trim()).filter(Boolean);
             const active = document.getElementById('em-active').checked;
             try {
                 const res = await authFetch(`/api/users/${uid}`, {
                     method: 'PATCH',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ role, groups, active })
+                    body: JSON.stringify({ active })
                 });
                 if (!res.ok) { const e = await res.json(); alert(e.detail || 'Update failed'); return; }
                 document.getElementById('edit-modal').style.display = 'none';
@@ -611,7 +639,8 @@
             const formData = new FormData();
             formData.append('file', currentFile);
             formData.append('enrich', document.getElementById('enrich-checkbox').checked);
-            formData.append('groups', document.getElementById('groups-input').value.trim());
+            const unitVal = document.getElementById('unit-select').value;
+            if (unitVal) formData.append('unit_id', unitVal);
 
             uploadBtn.style.display = 'none';
             progressContainer.style.display = 'block';

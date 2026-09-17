@@ -35,7 +35,7 @@ def test_semantic_cache():
 
     print(f"\n[*] Embedding primary query locally: '{query_1}'")
     emb_1 = embedder.embed_query(query_1)
-    store.add_to_semantic_cache(query_1, emb_1, answer_1, citations_1, access_key="test_scope")
+    store.add_to_semantic_cache(query_1, emb_1, answer_1, citations_1, org_id=1, access_key="test_scope")
     print("[+] Cached query and response.")
 
     # Exact hit (same access scope)

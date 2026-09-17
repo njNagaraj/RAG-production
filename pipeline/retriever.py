@@ -154,12 +154,14 @@ class Retriever:
         self.embedder = embedder
 
     def retrieve(self, query: str, history: List[Dict[str, str]] = None,
-                 allowed_groups: Optional[List[str]] = None) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+                 org_id: int = None, visible_node_ids: Optional[List[int]] = None
+                 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
         """
         Fully local hybrid retrieval:
         adaptive transform -> dense + FTS per sub-query -> weighted RRF fusion.
-        allowed_groups: RBAC document visibility (None = unrestricted/admin);
-        enforced inside the SQL WHERE clause of both search legs.
+        org_id: tenant scope (required). visible_node_ids: hierarchy document
+        visibility (None = org-wide owner/admin); both enforced inside the SQL
+        WHERE clause of both search legs.
         """
         # 1. Adaptive query transformation (rule-based, local)
         transform = transform_query(query, history or [])
@@ -168,7 +170,7 @@ class Retriever:
 
         # 2. Metadata filters (regex, validated against sources the user can see)
         try:
-            known_sources = self.vector_store.list_sources(allowed_groups=allowed_groups)
+            known_sources = self.vector_store.list_sources(org_id=org_id, visible_node_ids=visible_node_ids)
         except Exception:
             known_sources = []
         metadata_filter = extract_metadata_filter(standalone_query, known_sources)
@@ -179,8 +181,8 @@ class Retriever:
             try:
                 q_emb = self.embedder.embed_query(q)
                 results = self.vector_store.dense_search(
-                    q_emb, top_k=settings.top_k_retrieval, metadata_filter=metadata_filter,
-                    allowed_groups=allowed_groups
+                    q_emb, top_k=settings.top_k_retrieval, org_id=org_id,
+                    visible_node_ids=visible_node_ids, metadata_filter=metadata_filter,
                 )
                 all_dense_results.extend(results)
             except Exception as e:
@@ -200,9 +202,9 @@ class Retriever:
         for q in search_queries:
             try:
                 all_lexical_results.extend(
-                    self.vector_store.lexical_search(q, top_k=settings.top_k_retrieval,
-                                                     metadata_filter=metadata_filter,
-                                                     allowed_groups=allowed_groups)
+                    self.vector_store.lexical_search(q, top_k=settings.top_k_retrieval, org_id=org_id,
+                                                     visible_node_ids=visible_node_ids,
+                                                     metadata_filter=metadata_filter)
                 )
             except Exception as e:
                 print(f"Lexical search failed for query '{q}': {e}")
