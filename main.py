@@ -233,6 +233,11 @@ def handle_benchmark():
     avg_lat = sum(latencies) / len(latencies)
     print(f"\n[+] Benchmark Complete: Average Hybrid+Rerank Latency = {avg_lat:.1f}ms\n")
 
+def handle_eval(skip_generation: bool = False):
+    """Run automated golden dataset continuous evaluation."""
+    from eval_suite import run_evaluation_suite
+    run_evaluation_suite(skip_generation=skip_generation)
+
 def main():
     parser = argparse.ArgumentParser(
         description="Production RAG - Enterprise Developer-Agnostic RAG Engine",
@@ -258,6 +263,10 @@ def main():
     # benchmark
     subparsers.add_parser("benchmark", help="Run retrieval and reranker latency benchmarks")
 
+    # eval
+    p_eval = subparsers.add_parser("eval", help="Run automated golden dataset evaluation (Recall@K, MRR, Faithfulness)")
+    p_eval.add_argument("--skip-generation", action="store_true", help="Run retrieval-only evaluation without generating answers")
+
     # serve
     p_serve = subparsers.add_parser("serve", help="Start the API web server")
     p_serve.add_argument("--host", default="0.0.0.0", help="Host interface (default: 0.0.0.0)")
@@ -274,6 +283,8 @@ def main():
         handle_doctor()
     elif args.command == "benchmark":
         handle_benchmark()
+    elif args.command == "eval":
+        handle_eval(args.skip_generation)
     elif args.command == "serve":
         handle_serve(args.host, args.port, args.reload)
     else:

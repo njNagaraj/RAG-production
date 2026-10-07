@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 import re
@@ -9,7 +10,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request, BackgroundTasks, Depends
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -580,6 +581,136 @@ def _run_query(req: QueryRequest, tracer: Tracer, background_tasks: BackgroundTa
             metadata_filter=debug_info["metadata_filter"],
         ),
     }
+
+def _run_query_stream(req: QueryRequest, user: CurrentUser, background_tasks: BackgroundTasks):
+    tracer = Tracer()
+    router = app.state.router or QueryRouter()
+    org_id = user.org_id
+    visible_node_ids = user.visible_node_ids
+    access_key = compute_access_key(user)
+
+    # 0. Query routing
+    route_step = tracer.start_step("Query Routing", "Local embedding-similarity classifier (no LLM)")
+    decision = router.route(req.question)
+    route_step.finish({"route": decision.route, "confidence": round(decision.confidence, 3)})
+
+    if decision.route == "chitchat":
+        yield f"data: {json.dumps({'type': 'route', 'route': 'chitchat'})}\n\n"
+        words = decision.response.split(" ")
+        for i, w in enumerate(words):
+            token = w + (" " if i < len(words) - 1 else "")
+            yield f"data: {json.dumps({'type': 'token', 'token': token})}\n\n"
+        yield f"data: {json.dumps({'type': 'done', 'citations': [], 'trace': tracer.to_dict(), 'debug': _debug_block(req.question, [req.question])})}\n\n"
+        return
+
+    yield f"data: {json.dumps({'type': 'route', 'route': 'rag'})}\n\n"
+
+    embedder = get_embedder()
+    vector_store = get_vector_store()
+    try:
+        vector_store.connect()
+    except Exception:
+        yield f"data: {json.dumps({'type': 'error', 'detail': 'Database unavailable'})}\n\n"
+        return
+
+    # 1. Semantic cache check
+    cache_step = tracer.start_step("Semantic Cache Check", "Local query embedding vs cache store (RBAC-scoped)")
+    query_embedding = embedder.embed_query(req.question)
+    cache_result = vector_store.check_semantic_cache(
+        query_embedding,
+        similarity_threshold=settings.similarity_threshold,
+        access_key=access_key
+    )
+
+    if cache_result:
+        cache_step.finish({"hit": True, "similarity": cache_result["similarity"], "cached_query": cache_result["query_text"]})
+        yield f"data: {json.dumps({'type': 'cached', 'cached': True, 'citations': cache_result.get('citations') or []})}\n\n"
+        words = cache_result["answer"].split(" ")
+        for i, w in enumerate(words):
+            token = w + (" " if i < len(words) - 1 else "")
+            yield f"data: {json.dumps({'type': 'token', 'token': token})}\n\n"
+        yield f"data: {json.dumps({'type': 'done', 'citations': cache_result.get('citations') or [], 'trace': tracer.to_dict(), 'debug': _debug_block(req.question, [req.question])})}\n\n"
+        return
+
+    cache_step.finish({"hit": False})
+
+    retriever = Retriever(vector_store, embedder)
+    generator = Generator()
+
+    # 2. Hybrid retrieval + weighted RRF
+    retrieve_step = tracer.start_step("Retrieval & Fusion", "Adaptive transform (local rules) + dense + FTS + weighted RRF")
+    chunks, debug_info = retriever.retrieve(req.question, req.history, org_id=org_id, visible_node_ids=visible_node_ids)
+    retrieve_step.finish({
+        "standalone_query": debug_info["standalone_query"],
+        "query_type": debug_info["query_type"],
+        "expanded_count": len(debug_info["expanded_queries"]),
+        "fused_candidates": debug_info["fused_count"],
+        "metadata_filter": debug_info["metadata_filter"],
+    })
+
+    # 3. Local cross-encoder rerank
+    rerank_step = tracer.start_step("Re-ranking", "Local ONNX cross-encoder over all fused candidates")
+    reranker = get_reranker()
+    reranked_chunks = reranker.rerank(req.question, chunks, top_k=settings.top_k_reranked)
+    rerank_step.finish({"inputs": len(chunks), "outputs": len(reranked_chunks)})
+
+    from pipeline.generator import format_context_and_citations, filter_active_citations
+    _, initial_citations = format_context_and_citations(reranked_chunks)
+
+    # 4. Stream generation
+    generate_step = tracer.start_step("Answer Generation", "Streaming grounded answer with inline citations")
+    collected_tokens = []
+    for token in generator.generate_stream(req.question, reranked_chunks):
+        collected_tokens.append(token)
+        yield f"data: {json.dumps({'type': 'token', 'token': token})}\n\n"
+
+    full_answer = "".join(collected_tokens)
+    active_citations = filter_active_citations(full_answer, initial_citations)
+    generate_step.finish({"citations_count": len(active_citations)})
+
+    # 5. Faithfulness audit in background
+    background_tasks.add_task(_background_audit, req.question, full_answer, reranked_chunks, org_id, user.id)
+
+    # 6. Cache write
+    write_step = tracer.start_step("Semantic Cache Write", "Save query embedding and answer (current corpus epoch)")
+    try:
+        vector_store.add_to_semantic_cache(
+            req.question, query_embedding, full_answer, active_citations,
+            org_id=org_id, access_key=access_key
+        )
+        write_step.finish({"success": True})
+    except Exception as cache_err:
+        write_step.finish({"success": False, "error": str(cache_err)})
+
+    yield f"data: {json.dumps({
+        'type': 'done',
+        'citations': active_citations,
+        'trace': tracer.to_dict(),
+        'debug': _debug_block(
+            debug_info['standalone_query'],
+            debug_info['expanded_queries'],
+            query_type=debug_info['query_type'],
+            dense_count=debug_info['dense_count'],
+            lexical_count=debug_info['lexical_count'],
+            retrieved_count=debug_info['fused_count'],
+            reranked_count=len(reranked_chunks),
+            metadata_filter=debug_info['metadata_filter'],
+        )
+    })}\n\n"
+
+@app.post("/api/query/stream")
+@limiter.limit(settings.rate_limit_query)
+def query_pipeline_stream(request: Request, req: QueryRequest, background_tasks: BackgroundTasks,
+                          user: CurrentUser = Depends(get_current_user)):
+    return StreamingResponse(
+        _run_query_stream(req, user, background_tasks),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        }
+    )
 
 # Mount static files directory
 os.makedirs("static", exist_ok=True)

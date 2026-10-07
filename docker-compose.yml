@@ -35,6 +35,9 @@ services:
       DB_NAME: ${DB_NAME:-rag_db}
       UPLOAD_DIR: /app/uploads
       GENERATION_PROVIDER: ${GENERATION_PROVIDER:-auto}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "8000:8000"
     volumes:
@@ -67,6 +70,9 @@ services:
       DB_PASSWORD: ${DB_PASSWORD:-postgres}
       DB_NAME: ${DB_NAME:-rag_db}
       UPLOAD_DIR: /app/uploads
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - uploads:/app/uploads
     depends_on:
@@ -78,6 +84,19 @@ services:
           memory: 4g
     restart: unless-stopped
 
+  # Optional bundled Ollama service for 100% self-contained local stack:
+  # docker compose --profile local-llm up -d
+  ollama:
+    image: ollama/ollama:latest
+    container_name: rag_ollama
+    profiles: ["local-llm"]
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_models:/root/.ollama
+    restart: unless-stopped
+
 volumes:
   pgdata:
   uploads:
+  ollama_models:

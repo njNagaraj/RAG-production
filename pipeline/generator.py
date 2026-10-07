@@ -1,7 +1,7 @@
 import abc
 import json
 import logging
-from typing import List, Dict, Any, Tuple, Optional
+from typing import List, Dict, Any, Tuple, Optional, Iterator
 from pipeline.config import settings
 
 logger = logging.getLogger("rag.generator")
@@ -62,6 +62,11 @@ class BaseGenerator(abc.ABC):
         """Generates grounded answer and returns (answer_text, citations)."""
         pass
 
+    def generate_stream(self, query: str, chunks: List[Dict[str, Any]]) -> Iterator[str]:
+        """Yields text tokens for the answer (fallback: yields whole answer)."""
+        answer, _ = self.generate(query, chunks)
+        yield answer
+
 
 class GeminiGenerator(BaseGenerator):
     def __init__(self, api_key: Optional[str] = None, model_name: Optional[str] = None):
@@ -94,6 +99,31 @@ class GeminiGenerator(BaseGenerator):
         except Exception as e:
             logger.error("Gemini generation error: %s", e)
             return f"Error during generation: {e}", []
+
+    def generate_stream(self, query: str, chunks: List[Dict[str, Any]]) -> Iterator[str]:
+        if not chunks:
+            yield "I don't have any relevant documents to answer this question. Please upload source documents first."
+            return
+
+        context_str, _ = format_context_and_citations(chunks)
+        prompt = f"<retrieved_documents>\n{context_str}</retrieved_documents>\n\nUser Question: {query}\n\nAnswer:"
+
+        try:
+            from google.genai import types
+            response_stream = self.client.models.generate_content_stream(
+                model=self.model_name,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    system_instruction=SYSTEM_INSTRUCTION,
+                    temperature=0.0,
+                )
+            )
+            for chunk in response_stream:
+                if chunk.text:
+                    yield chunk.text
+        except Exception as e:
+            logger.error("Gemini stream error: %s", e)
+            yield f"\n[Generation error: {e}]"
 
 
 class OpenAIGenerator(BaseGenerator):
@@ -141,6 +171,31 @@ class OpenAIGenerator(BaseGenerator):
             logger.error("OpenAI generation error: %s", e)
             return f"Error during OpenAI generation: {e}", []
 
+    def generate_stream(self, query: str, chunks: List[Dict[str, Any]]) -> Iterator[str]:
+        if not chunks:
+            yield "I don't have any relevant documents to answer this question. Please upload source documents first."
+            return
+
+        context_str, _ = format_context_and_citations(chunks)
+        user_message = f"<retrieved_documents>\n{context_str}</retrieved_documents>\n\nUser Question: {query}\n\nAnswer:"
+
+        try:
+            stream = self.client.chat.completions.create(
+                model=self.model_name,
+                messages=[
+                    {"role": "system", "content": SYSTEM_INSTRUCTION},
+                    {"role": "user", "content": user_message}
+                ],
+                temperature=0.0,
+                stream=True,
+            )
+            for chunk in stream:
+                if chunk.choices and chunk.choices[0].delta and chunk.choices[0].delta.content:
+                    yield chunk.choices[0].delta.content
+        except Exception as e:
+            logger.error("OpenAI stream error: %s", e)
+            yield f"\n[Generation error: {e}]"
+
 
 class AnthropicGenerator(BaseGenerator):
     def __init__(self, api_key: Optional[str] = None, model_name: Optional[str] = None):
@@ -174,6 +229,28 @@ class AnthropicGenerator(BaseGenerator):
         except Exception as e:
             logger.error("Anthropic generation error: %s", e)
             return f"Error during Anthropic generation: {e}", []
+
+    def generate_stream(self, query: str, chunks: List[Dict[str, Any]]) -> Iterator[str]:
+        if not chunks:
+            yield "I don't have any relevant documents to answer this question. Please upload source documents first."
+            return
+
+        context_str, _ = format_context_and_citations(chunks)
+        prompt = f"<retrieved_documents>\n{context_str}</retrieved_documents>\n\nUser Question: {query}\n\nAnswer:"
+
+        try:
+            with self.client.messages.stream(
+                model=self.model_name,
+                max_tokens=1024,
+                system=SYSTEM_INSTRUCTION,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.0
+            ) as stream:
+                for text in stream.text_stream:
+                    yield text
+        except Exception as e:
+            logger.error("Anthropic stream error: %s", e)
+            yield f"\n[Generation error: {e}]"
 
 
 class OllamaGenerator(BaseGenerator):
@@ -215,6 +292,42 @@ class OllamaGenerator(BaseGenerator):
             logger.warning("Ollama connection failed (%s). Falling back to mock synthesis.", e)
             return MockGenerator().generate(query, chunks)
 
+    def generate_stream(self, query: str, chunks: List[Dict[str, Any]]) -> Iterator[str]:
+        if not chunks:
+            yield "I don't have any relevant documents to answer this question. Please upload source documents first."
+            return
+
+        import urllib.request
+        context_str, _ = format_context_and_citations(chunks)
+        prompt = f"{SYSTEM_INSTRUCTION}\n\n<retrieved_documents>\n{context_str}</retrieved_documents>\n\nUser Question: {query}\n\nAnswer:"
+
+        payload = json.dumps({
+            "model": self.model_name,
+            "prompt": prompt,
+            "stream": True,
+            "options": {"temperature": 0.0}
+        }).encode("utf-8")
+
+        req = urllib.request.Request(
+            f"{self.base_url}/api/generate",
+            data=payload,
+            headers={"Content-Type": "application/json"}
+        )
+
+        try:
+            with urllib.request.urlopen(req, timeout=120) as response:
+                for line in response:
+                    line = line.strip()
+                    if line:
+                        chunk_obj = json.loads(line.decode("utf-8"))
+                        text = chunk_obj.get("response", "")
+                        if text:
+                            yield text
+        except Exception as e:
+            logger.warning("Ollama stream failed (%s). Falling back to mock synthesis.", e)
+            for chunk_text in MockGenerator().generate_stream(query, chunks):
+                yield chunk_text
+
 
 class MockGenerator(BaseGenerator):
     """Deterministic, zero-credential generator for offline testing, CI/CD, and instant zero-touch demos."""
@@ -237,6 +350,35 @@ class MockGenerator(BaseGenerator):
         )
         return answer, citations[:1]
 
+    def generate_stream(self, query: str, chunks: List[Dict[str, Any]]) -> Iterator[str]:
+        answer, _ = self.generate(query, chunks)
+        words = answer.split(" ")
+        for i, word in enumerate(words):
+            yield word + (" " if i < len(words) - 1 else "")
+
+
+def probe_ollama(base_url: str) -> bool:
+    """Quick check to see if Ollama is running and responsive."""
+    import urllib.request
+    try:
+        url = f"{base_url.rstrip('/')}/api/tags"
+        req = urllib.request.Request(url, headers={"User-Agent": "ProductionRAG"})
+        with urllib.request.urlopen(req, timeout=0.8) as resp:
+            return resp.status == 200
+    except Exception:
+        # Also probe host.docker.internal if running in a container
+        if "localhost" in base_url or "127.0.0.1" in base_url:
+            alt_url = base_url.replace("localhost", "host.docker.internal").replace("127.0.0.1", "host.docker.internal")
+            try:
+                req = urllib.request.Request(f"{alt_url.rstrip('/')}/api/tags", headers={"User-Agent": "ProductionRAG"})
+                with urllib.request.urlopen(req, timeout=0.8) as resp:
+                    if resp.status == 200:
+                        settings.ollama_base_url = alt_url
+                        return True
+            except Exception:
+                pass
+        return False
+
 
 def get_generator() -> BaseGenerator:
     """Factory resolving the active generator based on settings and available API keys."""
@@ -253,7 +395,13 @@ def get_generator() -> BaseGenerator:
     elif provider == "mock":
         return MockGenerator()
 
-    # Auto-detection mode (zero-touch onboarding)
+    # Auto-detection mode (zero-touch developer onboarding)
+    # 1. Local-first: check if Ollama is active
+    if probe_ollama(settings.ollama_base_url):
+        logger.info("Local Ollama detected at %s. Using OllamaGenerator.", settings.ollama_base_url)
+        return OllamaGenerator()
+
+    # 2. Cloud providers if configured
     if settings.gemini_api_key:
         return GeminiGenerator()
     elif settings.openai_api_key or settings.groq_api_key or settings.deepseek_api_key:
@@ -261,7 +409,7 @@ def get_generator() -> BaseGenerator:
     elif settings.anthropic_api_key:
         return AnthropicGenerator()
     else:
-        logger.info("No cloud LLM keys found. Using MockGenerator with local hybrid retrieval.")
+        logger.info("No active Ollama or cloud LLM keys found. Using MockGenerator with local hybrid retrieval.")
         return MockGenerator()
 
 
@@ -272,3 +420,6 @@ class Generator(BaseGenerator):
 
     def generate(self, query: str, chunks: List[Dict[str, Any]]) -> Tuple[str, List[Dict[str, Any]]]:
         return self._impl.generate(query, chunks)
+
+    def generate_stream(self, query: str, chunks: List[Dict[str, Any]]) -> Iterator[str]:
+        return self._impl.generate_stream(query, chunks)

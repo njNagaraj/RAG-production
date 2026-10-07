@@ -16,6 +16,17 @@ def test_mock_generator():
     assert "25 days" in answer
     print("[+] test_mock_generator PASSED")
 
+def test_mock_generator_stream():
+    gen = MockGenerator()
+    chunks = [
+        {"source_doc": "handbook.pdf", "page_num": 1, "content": "Employees receive 25 days PTO annually."}
+    ]
+    tokens = list(gen.generate_stream("How many PTO days?", chunks))
+    full = "".join(tokens)
+    assert len(tokens) > 1
+    assert "handbook.pdf" in full
+    print("[+] test_mock_generator_stream PASSED")
+
 def test_context_formatting():
     chunks = [
         {"source_doc": "doc1.txt", "page_num": 2, "content": "Section A content", "context": "Document Header"}
@@ -46,6 +57,7 @@ def test_embedder_default():
 if __name__ == "__main__":
     print("Running Provider Tests...")
     test_mock_generator()
+    test_mock_generator_stream()
     test_context_formatting()
     test_citation_filtering()
     test_embedder_default()

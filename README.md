@@ -29,6 +29,7 @@
 
 Run a full-featured, enterprise-grade RAG stack locally with **zero external cloud dependencies**:
 
+### Option A: Docker Compose (All-in-One)
 ```bash
 # 1. Clone the repository
 git clone https://github.com/njNagaraj/RAG-production.git
@@ -37,25 +38,30 @@ cd RAG-production
 # 2. Start PostgreSQL with pgvector & API
 docker compose up -d
 
+# (Optional) If you want a bundled local Ollama instance inside Docker:
+# docker compose --profile local-llm up -d
+
 # 3. Open your browser:
 # 🖥️  UI Dashboard: http://localhost:8000
 # 📚  Interactive Swagger API: http://localhost:8000/docs
 ```
 
-Or run via the built-in **`rag` CLI**:
-
+### Option B: Local Developer CLI (`rag`)
 ```bash
-# Install package
-pip install -e .
+# 1. Install package in virtual environment
+pip install -e ".[all]"
 
-# Check system health
+# 2. Check system health
 rag doctor
 
-# Ingest your knowledge base
-rag ingest ./documents/
+# 3. Ingest bundled sample knowledge base in 5 seconds
+rag ingest ./sample_documents/
 
-# Query with grounded citations and latency metrics
-rag query "What is our company annual leave policy?"
+# 4. Query with grounded citations and latency metrics
+rag query "What is the annual lodging budget for L3 employees?"
+
+# 5. Run continuous evaluation suite against golden test cases
+rag eval
 ```
 
 ---
@@ -66,12 +72,14 @@ Most RAG tutorials break down the moment they hit production. Generic frameworks
 
 | Feature | ⚡ **Production RAG** | LangChain / LlamaIndex | Dify / RAGFlow |
 |---|:---:|:---:|:---:|
-| **Zero-Touch 100% Offline Mode** | ✅ Yes (Local ONNX + Ollama) | ⚠️ Complex setup | ⚠️ Heavyweight |
+| **Zero-Touch 100% Offline Mode** | ✅ Yes (Auto-probes Local Ollama) | ⚠️ Complex setup | ⚠️ Heavyweight |
+| **Real-Time Token Streaming (SSE)** | ✅ Native Server-Sent Events | ⚠️ Framework dependent | ⚠️ Heavyweight |
 | **Hybrid Search (Dense + BM25 RRF)** | ✅ Built-in native SQL | ⚠️ Requires external plugins | ⚠️ Resource heavy |
 | **CPU-Optimized Reranking** | ✅ Built-in Cross-Encoder | ❌ External API calls | ⚠️ Partial |
 | **Hierarchical Multi-Tenancy** | ✅ Org → Dept → Team → User | ❌ None | ⚠️ Basic Org only |
 | **Semantic Response Cache** | ✅ Built-in (Role-Isolated) | ❌ DIY | ❌ No RBAC bounds |
 | **Built-in Faithfulness Guardrail**| ✅ Self-auditing evaluator | ❌ Requires 3rd-party SaaS | ❌ No |
+| **Continuous Evaluation Harness** | ✅ Built-in (`rag eval`) | ❌ Requires external tool | ❌ No |
 | **Memory Footprint** | ⚡ **< 500MB RAM** | ⚠️ Heavy (> 2GB) | ⚠️ Very Heavy (> 4GB) |
 | **Startup Latency** | ⚡ **< 2 seconds** | ⚠️ 10-20s | ⚠️ 1-2 minutes |
 
@@ -161,6 +169,9 @@ rag doctor
 
 # Benchmark hybrid retrieval and reranking latency
 rag benchmark
+
+# Run golden dataset continuous evaluation suite
+rag eval
 
 # Launch production server with live reloading
 rag serve --port 8000 --reload
