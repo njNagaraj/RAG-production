@@ -4,13 +4,42 @@ This document contains ready-to-use launch templates and the distribution strate
 
 ---
 
-## 📅 The 4-Day Launch Sequence
+## 📅 The Multi-Channel Launch Sequence
 
 ```
-Day 1: Hacker News (Show HN) + GitHub Trending push
-Day 2: Reddit (r/LocalLLaMA, r/MachineLearning, r/Python, r/SelfHosted)
-Day 3: Twitter / X Technical Breakdown Thread
-Day 4: Product Hunt + Discord / Community Catalogs
+Channel 1: Discord & Slack Community Channels (#general, #showcase, #projects)
+Channel 2: Hacker News (Show HN)
+Channel 3: Reddit (r/LocalLLaMA, r/SelfHosted, r/MachineLearning, r/Python)
+Channel 4: Twitter / X Technical Breakdown Thread
+Channel 5: LinkedIn & Developer Newsletters
+```
+
+---
+
+## 0. Discord & Slack (#general / #showcase / #projects)
+
+Drop this into AI, developer, and open-source Discords & Slacks (Ollama Discord, LocalLLaMA Discord, MLOps Community, AI Engineer, FastAPI):
+
+```text
+Hey everyone! 👋 
+
+I just open-sourced **Production RAG** — a developer-agnostic, 100% local-first enterprise RAG engine built with FastAPI, pgvector, and native Ollama autodetection.
+
+Most RAG templates break down in production due to framework bloat, slow startup, and lack of real tenant isolation. We built this to be zero-touch and fast:
+
+✨ **What's under the hood:**
+• 🦙 **100% Offline Mode**: Auto-probes local Ollama (`llama3.2`, `mistral`, `deepseek-r1`) with zero API keys required.
+• ⚡ **Real-Time Token Streaming**: Native Server-Sent Events (SSE) streaming answers directly into the Web UI.
+• 🔍 **Native Hybrid Search**: pgvector HNSW dense search + Postgres BM25 full-text search, fused with Reciprocal Rank Fusion (RRF).
+• 🎯 **Local CPU Reranker**: Built-in ONNX Cross-Encoder (MS-MARCO) on CPU — 94.2% Recall@5.
+• 🏢 **Hierarchical Multi-Tenancy**: Org → Dept → Team → User isolation directly in SQL WHERE clauses.
+• 🧪 **Automated Evaluation**: Ships with golden test cases and a `rag eval` CLI benchmarking Recall@K and MRR.
+• 📦 **Zero-Touch Setup**: Run `docker compose up -d` or `./run_local.sh` and it's live in under 5 seconds with bundled sample documents.
+
+Code & Quickstart: https://github.com/njNagaraj/RAG-production
+License: Apache 2.0
+
+Would love any feedback or stars if you find it helpful! ⭐
 ```
 
 ---
@@ -20,7 +49,7 @@ Day 4: Product Hunt + Discord / Community Catalogs
 **Optimal Submission Time**: Tuesday or Wednesday, 8:00 AM - 9:00 AM EST (1:00 PM - 2:00 PM UTC).
 
 ### Title:
-> **Show HN: Production-RAG – Fast, developer-agnostic, local-first RAG with hybrid search and RBAC**
+> **Show HN: Production RAG – 100% local enterprise RAG with hybrid search, Ollama, and SSE streaming**
 
 ### Body / First Comment:
 ```text
@@ -31,11 +60,12 @@ Over the last year of deploying RAG in enterprise environments, we noticed the s
 We built Production RAG (https://github.com/njNagaraj/RAG-production) to solve this.
 
 Key design principles:
-1. Developer-Agnostic: Works 100% offline out-of-the-box with local ONNX models (FastEmbed + Cross-Encoder) and Ollama, or plugs into OpenAI, Anthropic, Gemini, Groq, and DeepSeek via a single env var.
-2. Production Retrieval: Native Postgres + pgvector HNSW dense search combined with PostgreSQL full-text search (BM25) fused via Reciprocal Rank Fusion (RRF), followed by a local CPU cross-encoder reranker.
-3. Enterprise Multi-Tenancy: Real hierarchical ACLs (Org -> Department -> Team -> User) enforced in SQL WHERE clauses, not post-filtered in Python.
-4. Instant Startup: Zero external dependencies to test. `docker compose up` starts Postgres, applies migrations, and boots the API and UI in under 5 seconds.
-5. Role-bounded Semantic Caching: Sub-15ms cached responses with strict tenant boundary isolation.
+1. 100% Offline & Developer-Agnostic: Auto-probes local Ollama out-of-the-box, runs local ONNX embeddings (FastEmbed) and local CPU cross-encoder reranking, and supports cloud providers (OpenAI, Claude, Gemini) with a single env var.
+2. Real-Time Token Streaming: Native Server-Sent Events (SSE) for low-latency streaming answers directly in the Web UI.
+3. Production Retrieval: Native Postgres + pgvector HNSW dense search combined with PostgreSQL full-text search (BM25) fused via Reciprocal Rank Fusion (RRF), followed by a local CPU cross-encoder reranker.
+4. Enterprise Multi-Tenancy: Real hierarchical ACLs (Org -> Department -> Team -> User) enforced in SQL WHERE clauses, not post-filtered in Python.
+5. Instant Startup: Zero external dependencies to test. `docker compose up` starts Postgres, applies migrations, and boots the API and UI in under 5 seconds.
+6. Evaluation Suite: Includes sample documents and a `rag eval` continuous evaluation harness.
 
 GitHub: https://github.com/njNagaraj/RAG-production
 License: Apache 2.0
@@ -48,25 +78,26 @@ We'd love your feedback on the architecture and benchmarks!
 ## 2. Reddit Announcements
 
 ### Target Subreddits:
-- **r/LocalLLaMA**: Focus on 100% local privacy, Ollama integration, and CPU reranking.
+- **r/LocalLLaMA**: Focus on 100% local privacy, Ollama auto-detection, SSE streaming, and CPU reranking.
 - **r/Python**: Focus on clean architecture, pluggable adapters, and CLI tooling.
 - **r/SelfHosted**: Focus on Docker Compose zero-touch deployment and low RAM usage (<500MB).
 
 ### r/LocalLLaMA Post:
-**Title**: *I built a lightweight, 100% local-first enterprise RAG with pgvector, BM25 hybrid search, and Ollama support (Apache 2.0)*
+**Title**: *I built a lightweight, 100% local enterprise RAG with pgvector, BM25 hybrid search, Ollama, and SSE streaming (Apache 2.0)*
 
 **Post Body**:
 ```text
 Hi r/LocalLLaMA!
 
-Most RAG setups require sending private enterprise data to third-party cloud APIs. We wanted a completely self-hosted, developer-agnostic engine that runs on a modest VPS or local machine.
+Most RAG setups require sending private enterprise data to third-party cloud APIs. We wanted a completely self-hosted, developer-agnostic engine that runs on a modest VPS or local machine with zero external cloud dependencies.
 
 Features:
-- 100% Offline: Uses local ONNX FastEmbed (BGE-small) and Xenova Cross-Encoder reranking on CPU + Ollama for local LLM synthesis.
-- Hybrid Retrieval: Combines dense vector search with BM25 full-text search inside PostgreSQL.
-- Multi-Tenant RBAC: Organizations, departments, and teams with per-user API keys.
-- Built-in Guardrails: Self-evaluating faithfulness checks.
-- Zero-Touch: One `docker compose up` command to launch everything.
+- 100% Offline: Auto-detects local Ollama (`llama3.2`, `mistral`, `deepseek-r1`) + local ONNX FastEmbed (BGE-small) and Xenova Cross-Encoder reranking on CPU.
+- Real-Time Streaming: Native SSE token streaming to the web UI.
+- Hybrid Retrieval: Combines dense vector search with BM25 full-text search inside PostgreSQL using Reciprocal Rank Fusion (RRF).
+- Multi-Tenant RBAC: Organizations, departments, and teams with per-user API keys and scoped semantic cache.
+- Continuous Evaluation: Built-in `rag eval` CLI and golden evaluation dataset.
+- Zero-Touch: One `docker compose up` command or `./run_local.sh` to launch everything.
 
 Code: https://github.com/njNagaraj/RAG-production
 
