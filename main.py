@@ -87,12 +87,24 @@ def handle_doctor():
         print(f"    [!] Embedder failed: {e}")
         all_ok = False
 
+    generator_name = "unavailable"
     try:
         generator = get_generator()
-        print(f"    [+] Generator provider: {generator.__class__.__name__}")
+        generator_name = generator.__class__.__name__
+        print(f"    [+] Generator provider: {generator_name}")
     except Exception as e:
         print(f"    [!] Generator init failed: {e}")
         all_ok = False
+
+    # 4. Data locality: which stages send data off this host
+    from pipeline.models import locality_report
+    print("\n[4] Data Locality:")
+    remote = 0
+    for stage, backend, local in locality_report(generator_name):
+        print(f"    [{'local' if local else 'REMOTE'}] {stage}: {backend}")
+        remote += not local
+    print("    [+] 100% local: no stage leaves this host." if remote == 0
+          else f"    [i] {remote} stage(s) can reach the network. See .env.example for local options.")
 
     print("\n" + "=" * 60)
     if all_ok:
@@ -238,6 +250,17 @@ def handle_eval(skip_generation: bool = False):
     from eval_suite import run_evaluation_suite
     run_evaluation_suite(skip_generation=skip_generation)
 
+def handle_models(skip_docling: bool = False):
+    from pipeline.models import pull_models
+    status = pull_models(include_docling=not skip_docling)
+    failed = 0
+    for name, result in status.items():
+        print(f"  [{'OK' if result == 'ok' else 'FAIL'}] {name}" + ("" if result == "ok" else f": {result}"))
+        failed += result != "ok"
+    if failed:
+        sys.exit(1)
+    print("All models cached. Set HF_HUB_OFFLINE=1 to block any further downloads.")
+
 def main():
     parser = argparse.ArgumentParser(
         description="Production RAG - Enterprise Developer-Agnostic RAG Engine",
@@ -267,6 +290,11 @@ def main():
     p_eval = subparsers.add_parser("eval", help="Run automated golden dataset evaluation (Recall@K, MRR, Faithfulness)")
     p_eval.add_argument("--skip-generation", action="store_true", help="Run retrieval-only evaluation without generating answers")
 
+    # models
+    p_models = subparsers.add_parser("models", help="Download local models for offline use")
+    p_models.add_argument("action", choices=["pull"], help="pull: fetch embedder, reranker, tokenizer, Docling models")
+    p_models.add_argument("--skip-docling", action="store_true", help="Skip the Docling layout/table models")
+
     # serve
     p_serve = subparsers.add_parser("serve", help="Start the API web server")
     p_serve.add_argument("--host", default="0.0.0.0", help="Host interface (default: 0.0.0.0)")
@@ -285,6 +313,8 @@ def main():
         handle_benchmark()
     elif args.command == "eval":
         handle_eval(args.skip_generation)
+    elif args.command == "models":
+        handle_models(args.skip_docling)
     elif args.command == "serve":
         handle_serve(args.host, args.port, args.reload)
     else:

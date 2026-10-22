@@ -31,7 +31,7 @@ class FastEmbedEmbedder(BaseEmbedder):
         except ImportError:
             raise ImportError("fastembed package not installed. Run: pip install fastembed")
         self.model_name = model_name or settings.local_embedding_model
-        self.model = TextEmbedding(model_name=self.model_name)
+        self.model = TextEmbedding(model_name=self.model_name, cache_dir=settings.model_cache_dir or None)
         dummy = next(iter(self.model.embed(["hello"])))
         self._dimension = len(dummy)
 

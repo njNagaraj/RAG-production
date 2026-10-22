@@ -13,16 +13,21 @@ COPY --from=builder /install /usr/local
 
 # Pre-download local ONNX models into the image so containers start instantly
 # and run in egress-restricted networks.
-ENV FASTEMBED_CACHE_PATH=/app/models
-RUN python - <<'PY'
-from fastembed import TextEmbedding
-from fastembed.rerank.cross_encoder import TextCrossEncoder
-from tokenizers import Tokenizer
-TextEmbedding(model_name="BAAI/bge-small-en-v1.5")
-TextCrossEncoder(model_name="Xenova/ms-marco-MiniLM-L-6-v2")
-Tokenizer.from_pretrained("BAAI/bge-small-en-v1.5")
-print("Models cached.")
-PY
+# HF_HOME is set before the build step so the tokenizer and Docling models
+# land in /app/models too (the runtime user cannot read /root/.cache).
+ENV FASTEMBED_CACHE_PATH=/app/models \
+    MODEL_CACHE_DIR=/app/models \
+    HF_HOME=/app/models/hf \
+    DOCLING_ARTIFACTS_PATH=/app/models/docling
+
+# Only the files the pull needs, so code edits keep this layer cached
+COPY pipeline/__init__.py pipeline/config.py pipeline/models.py pipeline/
+RUN python -c "from pipeline.models import pull_models; s = pull_models(); print(s); \
+    import sys; sys.exit(any(v != 'ok' for v in s.values()))"
+
+# Every model is now in the image: block runtime downloads. A different
+# LOCAL_EMBEDDING_MODEL in .env needs HF_HUB_OFFLINE=0 (or a rebuild).
+ENV HF_HUB_OFFLINE=1
 
 COPY pipeline/ pipeline/
 COPY migrations/ migrations/

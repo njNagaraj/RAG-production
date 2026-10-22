@@ -43,9 +43,16 @@ class Settings(BaseSettings):
     local_embedding_model: str = "BAAI/bge-small-en-v1.5"
     local_reranker_model: str = "Xenova/ms-marco-MiniLM-L-6-v2"
 
-    # Multimodal ingestion: describe charts/photos with Gemini vision at
-    # ingest time (one-off per document; query time stays fully local)
+    # Multimodal ingestion: describe charts/photos at ingest time.
+    # vision: ollama (local, default) | gemini (opt-in cloud) | none
     describe_images: bool = False
+    vision_provider: str = "ollama"
+    ollama_vision_model: str = "llama3.2-vision"
+    vision_timeout_seconds: float = 120.0
+
+    # Local model files. None = library defaults (~/.cache). Point both at a
+    # baked or mounted directory and set HF_HUB_OFFLINE=1 for air-gapped hosts.
+    model_cache_dir: Optional[str] = None
 
     # Chunking: auto (adaptive dispatcher) | parent_child | fixed | page | code | semantic
     chunking_strategy: str = "auto"

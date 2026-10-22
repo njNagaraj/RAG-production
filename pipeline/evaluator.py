@@ -40,7 +40,8 @@ class Evaluator:
                 self._encoder = reranker.model
             else:
                 from fastembed.rerank.cross_encoder import TextCrossEncoder
-                self._encoder = TextCrossEncoder(model_name=settings.local_reranker_model)
+                self._encoder = TextCrossEncoder(model_name=settings.local_reranker_model,
+                                                 cache_dir=settings.model_cache_dir or None)
         return self._encoder
 
     @staticmethod

@@ -23,7 +23,8 @@ class LocalCrossEncoderReranker(BaseReranker):
             from fastembed.rerank.cross_encoder import TextCrossEncoder
         except ImportError:
             raise ImportError("fastembed package not installed. Run: pip install fastembed")
-        self.model = TextCrossEncoder(model_name=model_name or settings.local_reranker_model)
+        self.model = TextCrossEncoder(model_name=model_name or settings.local_reranker_model,
+                                      cache_dir=settings.model_cache_dir or None)
 
     def rerank(self, query: str, candidates: List[Dict[str, Any]], top_k: int) -> List[Dict[str, Any]]:
         if not candidates:

@@ -1,8 +1,11 @@
+import logging
 import re
 from typing import List, Dict, Any, Tuple, Optional
 from pipeline.config import settings
 from pipeline.embedder import BaseEmbedder
 from pipeline.vector_store import BaseVectorStore
+
+logger = logging.getLogger(__name__)
 
 # --- Local adaptive query transformation (no LLM) ---------------------------
 # Query types and their retrieval strategies:
@@ -146,6 +149,22 @@ def reciprocal_rank_fusion(
         fused_results.append(item)
     return fused_results
 
+def collapse_shared_parents(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Parent-child chunks return the parent text as `content`, so sibling
+    children of one parent arrive as duplicates. Keep the best-ranked sibling
+    per (source, parent text); the reranker and LLM then see distinct passages.
+    """
+    seen = set()
+    collapsed = []
+    for item in results:
+        key = (item.get("source_doc"), item.get("content"))
+        if key in seen:
+            continue
+        seen.add(key)
+        collapsed.append(item)
+    return collapsed
+
 # --- Retriever ----------------------------------------------------------------
 
 class Retriever:
@@ -186,7 +205,7 @@ class Retriever:
                 )
                 all_dense_results.extend(results)
             except Exception as e:
-                print(f"Dense search failed for query '{q}': {e}")
+                logger.warning("Dense search failed for query %r: %s", q, e)
 
         # Deduplicate dense results keeping highest score
         dense_dict: Dict[Any, Dict[str, Any]] = {}
@@ -207,7 +226,7 @@ class Retriever:
                                                      metadata_filter=metadata_filter)
                 )
             except Exception as e:
-                print(f"Lexical search failed for query '{q}': {e}")
+                logger.warning("Lexical search failed for query %r: %s", q, e)
         lexical_dict: Dict[Any, Dict[str, Any]] = {}
         for item in all_lexical_results:
             cid = item["id"]
@@ -223,6 +242,7 @@ class Retriever:
             k=settings.rrf_constant,
             lexical_weight=transform["lexical_weight"],
         )
+        fused_results = collapse_shared_parents(fused_results)
 
         debug_info = {
             "standalone_query": standalone_query,

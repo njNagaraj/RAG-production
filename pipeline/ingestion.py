@@ -22,7 +22,7 @@ def ingest_file(file_path: str, org_id: int, unit_id: int, enrich: bool = False,
                 source_name: Optional[str] = None, uploaded_by: Optional[int] = None) -> Dict[str, Any]:
     """
     Full local ingestion pipeline for one file:
-    parse (Docling: structure/tables/OCR, optional Gemini vision for charts)
+    parse (Docling: structure/tables/OCR, optional local vision model for charts)
     -> adaptive chunking -> local embeddings (batched) -> bulk COPY insert
     -> bump corpus epoch (invalidates semantic cache).
 
@@ -34,7 +34,7 @@ def ingest_file(file_path: str, org_id: int, unit_id: int, enrich: bool = False,
     embedder = get_embedder()
     vector_store = get_vector_store()
 
-    vision_client = get_vision_client() if (enrich or settings.describe_images) else None
+    vision_client = get_vision_client(force=enrich)
 
     logger.info("Parsing %s", file_path)
     doc_data = parser.parse(file_path, client=vision_client)

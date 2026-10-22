@@ -539,8 +539,8 @@ def _run_query(req: QueryRequest, tracer: Tracer, background_tasks: BackgroundTa
     reranked_chunks = reranker.rerank(req.question, chunks, top_k=settings.top_k_reranked)
     rerank_step.finish({"inputs": len(chunks), "outputs": len(reranked_chunks)})
 
-    # 4. Grounded generation — the single cloud LLM call
-    generate_step = tracer.start_step("Answer Generation", "Gemini grounded answer with inline citations (only cloud call)")
+    # 4. Grounded generation: the single LLM call (local Ollama by default)
+    generate_step = tracer.start_step("Answer Generation", f"{type(generator._impl).__name__}: grounded answer with inline citations")
     answer, citations = generator.generate(req.question, reranked_chunks)
     generate_step.finish({"citations_count": len(citations)})
 

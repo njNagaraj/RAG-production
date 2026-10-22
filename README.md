@@ -153,6 +153,32 @@ EMBEDDING_PROVIDER=local        # local (ONNX CPU) | openai | gemini | ollama
 
 ---
 
+## 🔒 100% Local Mode
+
+Every stage has a local backend. Defaults are local except where noted.
+
+| Stage | Local backend | Opt-in cloud |
+|---|---|---|
+| Generation | Ollama (`auto` probes it first), any OpenAI-compatible server on localhost | OpenAI, Anthropic, Gemini, Groq, DeepSeek |
+| Embedding | fastembed ONNX `bge-small-en-v1.5`, Ollama | OpenAI, Gemini |
+| Reranking + faithfulness | fastembed ONNX cross-encoder | Cohere |
+| Parsing, tables, OCR | Docling | none |
+| Chart/image description | Ollama vision (`llama3.2-vision`) | Gemini (`VISION_PROVIDER=gemini`) |
+| Web UI | system fonts, no CDN | none |
+
+Air-gapped setup:
+
+```bash
+rag models pull                 # embedder, reranker, tokenizer, Docling models
+ollama pull llama3.2 && ollama pull llama3.2-vision
+export HF_HUB_OFFLINE=1         # block every runtime download
+rag doctor                      # section [4] lists any stage that can leave the host
+```
+
+The Docker image bakes all models at build time and sets `HF_HUB_OFFLINE=1`.
+
+---
+
 ## 🛠️ CLI Tooling (`rag`)
 
 Production RAG ships with a battle-tested developer CLI:
@@ -164,8 +190,11 @@ rag ingest ./knowledge_base/ --org acme-corp
 # Ask questions with instant evaluation metrics
 rag query "What are the reimbursement limits for travel?"
 
-# Run automated system diagnostics
+# Run automated system diagnostics (includes a data-locality check)
 rag doctor
+
+# Download every local model once, for offline or air-gapped hosts
+rag models pull
 
 # Benchmark hybrid retrieval and reranking latency
 rag benchmark
@@ -206,6 +235,7 @@ Organization (e.g. Acme Corp)
 - **Row-Level Security**: Every document, chunk, cache entry, and audit event carries an `org_id` and `unit_id`.
 - **Granular API Keys**: Salted and hashed per user with automatic brute-force IP rate-limiting.
 - **Cache Isolation**: Semantic cache keys are partition-bounded to prevent unauthorized data leaks between departments.
+- **Filter Before Ranking**: Both search legs apply the permission filter inside SQL. A scope of 10,000 chunks or fewer gets an exact vector scan, so a small team still receives a full top-k. Larger scopes use pgvector 0.8 iterative HNSW scans.
 
 ---
 
