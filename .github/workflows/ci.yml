@@ -65,4 +65,4 @@ jobs:
           DB_PASSWORD: postgres
           GENERATION_PROVIDER: mock
         run: |
-          pytest test_pipeline.py test_providers.py test_production_features.py test_parent_child.py -v
+          pytest test_pipeline.py test_providers.py test_production_features.py test_parent_child.py test_scoped_retrieval.py -v

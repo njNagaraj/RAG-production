@@ -59,6 +59,15 @@ class Settings(BaseSettings):
     top_k_reranked: int = 5
     rrf_constant: int = 60
     hnsw_ef_search: int = 80
+    # Permission-scoped dense search. HNSW filters AFTER the graph walk, so a
+    # narrow scope (small team) can starve the candidate list:
+    # - visible set <= exact_scan_max_rows: exact scan over that set (100% recall)
+    # - pgvector >= 0.8: iterative scan keeps walking until top_k rows pass the filter
+    # - older pgvector: retry once with ef_search raised to hnsw_ef_search_max
+    exact_scan_max_rows: int = 10000
+    hnsw_iterative_scan: bool = True
+    hnsw_max_scan_tuples: int = 20000
+    hnsw_ef_search_max: int = 400
 
     # Semantic cache
     similarity_threshold: float = 0.95

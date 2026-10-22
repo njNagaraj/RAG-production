@@ -87,6 +87,7 @@ class PostgresVectorStore(BaseVectorStore):
         )
         self._opened = False
         self._open_lock = threading.Lock()
+        self._iterative_scan: Optional[bool] = None
 
     def connect(self):
         if self._opened:
@@ -573,13 +574,17 @@ class PostgresVectorStore(BaseVectorStore):
         with self.pool.connection() as conn:
             with conn.cursor() as cur:
                 cur.execute("DELETE FROM document_chunks WHERE document_id = %s", (document_id,))
+                cur.execute("SELECT unit_id FROM documents WHERE id = %s;", (document_id,))
+                row = cur.fetchone()
+                unit_id = row["unit_id"] if row else None
                 with cur.copy(
-                    "COPY document_chunks (document_id, org_id, chunk_index, page_num, content, context, embedding, parent_content, parent_chunk_index) FROM STDIN"
+                    "COPY document_chunks (document_id, org_id, unit_id, chunk_index, page_num, content, context, embedding, parent_content, parent_chunk_index) FROM STDIN"
                 ) as copy:
                     for chunk, embedding in zip(chunks, embeddings):
                         copy.write_row((
                             document_id,
                             org_id,
+                            unit_id,
                             chunk["chunk_index"],
                             chunk["page_num"],
                             chunk["text"],
@@ -660,7 +665,9 @@ class PostgresVectorStore(BaseVectorStore):
     @classmethod
     def _filter_sql(cls, org_id: int, visible_node_ids: Optional[List[int]],
                     metadata_filter: Optional[Dict[str, Any]], params: list) -> List[str]:
-        clauses = cls._visibility_sql(org_id, visible_node_ids, params, alias="d")
+        # Tenant + hierarchy filter on the chunk's own columns (migration 0006),
+        # so the visible set is resolvable from document_chunks_org_unit_idx alone.
+        clauses = cls._visibility_sql(org_id, visible_node_ids, params, alias="dc")
         if metadata_filter:
             if "source_doc" in metadata_filter:
                 clauses.append("d.source ILIKE %s")
@@ -670,17 +677,48 @@ class PostgresVectorStore(BaseVectorStore):
                 params.append(metadata_filter["page_num"])
         return clauses
 
+    def _supports_iterative_scan(self, cur) -> bool:
+        """pgvector >= 0.8 defines hnsw.iterative_scan once its library is loaded."""
+        if self._iterative_scan is None:
+            cur.execute("SELECT '[1]'::vector;")  # loads the vector library in this session
+            cur.execute("SELECT current_setting('hnsw.iterative_scan', true) AS v;")
+            self._iterative_scan = cur.fetchone()["v"] is not None
+        return self._iterative_scan
+
     def dense_search(self, query_vector: List[float], top_k: int, org_id: int,
                      visible_node_ids: Optional[List[int]] = None,
                      metadata_filter: Dict[str, Any] = None) -> List[Dict[str, Any]]:
+        """
+        Permission filter lives in the WHERE clause. HNSW applies that filter
+        after the graph walk, so for a narrow scope it may return fewer than
+        top_k rows. Three guards keep recall up:
+        1. Visible set <= exact_scan_max_rows: exact scan of only that set.
+        2. pgvector >= 0.8: hnsw.iterative_scan keeps walking the graph.
+        3. Older pgvector: one retry with ef_search = hnsw_ef_search_max.
+        """
         self.connect()
         vec = _vec(query_vector)
-        params: list = [vec]
-        where_clauses = self._filter_sql(org_id, visible_node_ids, metadata_filter, params)
+        filter_params: list = []
+        where_clauses = self._filter_sql(org_id, visible_node_ids, metadata_filter, filter_params)
         where_sql = "WHERE " + " AND ".join(where_clauses)
-        params.extend([vec, top_k])
+        needs_join = bool(metadata_filter and "source_doc" in metadata_filter)
+        count_join = "JOIN documents d ON dc.document_id = d.id" if needs_join else ""
+        limit = settings.exact_scan_max_rows
 
-        query_sql = f"""
+        # No ORDER BY inside the CTE, so the planner cannot pick HNSW for it
+        exact_sql = f"""
+            WITH scoped AS MATERIALIZED (
+                SELECT dc.id, dc.chunk_index, dc.page_num,
+                       COALESCE(dc.parent_content, dc.content) AS content,
+                       dc.content AS child_content, dc.context, d.source AS source_doc,
+                       1 - (dc.embedding <=> %s::vector) AS score
+                FROM document_chunks dc
+                JOIN documents d ON dc.document_id = d.id
+                {where_sql}
+            )
+            SELECT * FROM scoped ORDER BY score DESC LIMIT %s;
+        """
+        ann_sql = f"""
             SELECT
                 dc.id,
                 dc.chunk_index,
@@ -696,11 +734,35 @@ class PostgresVectorStore(BaseVectorStore):
             ORDER BY dc.embedding <=> %s::vector
             LIMIT %s;
         """
+        ann_params = tuple([vec] + filter_params + [vec, top_k])
+
         with self.pool.connection() as conn:
             with conn.cursor() as cur:
-                cur.execute("SET LOCAL hnsw.ef_search = %s;" % int(settings.hnsw_ef_search))
-                cur.execute(query_sql, tuple(params))
-                return cur.fetchall()
+                # 1. Bounded count: reads at most limit+1 index entries
+                cur.execute(
+                    f"SELECT count(*) AS n FROM (SELECT 1 FROM document_chunks dc {count_join} "
+                    f"{where_sql} LIMIT %s) t;",
+                    tuple(filter_params + [limit + 1]),
+                )
+                if cur.fetchone()["n"] <= limit:
+                    cur.execute(exact_sql, tuple([vec] + filter_params + [top_k]))
+                    return cur.fetchall()
+
+                cur.execute("SET LOCAL hnsw.ef_search = %s;" % max(int(settings.hnsw_ef_search), int(top_k)))
+                iterative = settings.hnsw_iterative_scan and self._supports_iterative_scan(cur)
+                if iterative:
+                    # relaxed_order may return rows slightly out of order; re-sorted below
+                    cur.execute("SET LOCAL hnsw.iterative_scan = relaxed_order;")
+                    cur.execute("SET LOCAL hnsw.max_scan_tuples = %s;" % int(settings.hnsw_max_scan_tuples))
+                cur.execute(ann_sql, ann_params)
+                rows = cur.fetchall()
+
+                # 3. Starved result on old pgvector: one wider graph walk
+                if len(rows) < top_k and not iterative and settings.hnsw_ef_search_max > settings.hnsw_ef_search:
+                    cur.execute("SET LOCAL hnsw.ef_search = %s;" % int(settings.hnsw_ef_search_max))
+                    cur.execute(ann_sql, ann_params)
+                    rows = cur.fetchall()
+                return sorted(rows, key=lambda r: r["score"], reverse=True)
 
     def lexical_search(self, query_text: str, top_k: int, org_id: int,
                        visible_node_ids: Optional[List[int]] = None,
