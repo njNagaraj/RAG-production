@@ -200,6 +200,9 @@ rag models pull
 # Benchmark hybrid retrieval and reranking latency
 rag benchmark
 
+# Retrieval quality on a public BEIR dataset (nDCG@10, Recall@10, MRR@10)
+rag bench --dataset scifact
+
 # Run golden dataset continuous evaluation suite
 rag eval
 
@@ -211,14 +214,20 @@ rag serve --port 8000 --reload
 
 ## 📊 Benchmarks
 
-Evaluated on standard industry retrieval benchmarks (HotpotQA / BEIR subset):
+Measured with `rag bench --dataset scifact` on BEIR SciFact: 5,183 abstracts, 300 test queries, 4 CPU threads, no GPU.
+Every row runs the real pipeline: Chunker, local embedder, Postgres, RRF, local cross-encoder.
 
-| Retrieval Strategy | Latency (p95) | Accuracy / Recall@5 | Hallucination Rate |
-|---|---|---|---|
-| Naive Vector Search | 142ms | 61.4% | 18.2% |
-| Hybrid (Dense + BM25) | 168ms | 79.8% | 11.5% |
-| **Production RAG (Hybrid + Cross-Encoder)** | **184ms** | **94.2%** | **< 1.8%** |
-| **Production RAG (Semantic Cache Hit)** | **12ms** | **100%** | **0.0%** |
+| Method | nDCG@10 | Recall@10 | MRR@10 | p50 | p95 |
+|---|---|---|---|---|---|
+| Postgres full-text search | 0.606 | 0.723 | 0.578 | 58 ms | 138 ms |
+| Dense (`bge-small-en-v1.5`) | 0.702 | 0.833 | 0.669 | 107 ms | 139 ms |
+| Hybrid (dense + FTS, RRF) | 0.694 | 0.827 | 0.660 | 180 ms | 291 ms |
+| Hybrid + rerank (`ms-marco-MiniLM-L-6-v2`) | 0.687 | 0.821 | 0.652 | 2558 ms | 3061 ms |
+
+On SciFact, dense alone scores highest. Equal-weight RRF and the MS MARCO reranker each cost about 0.01 nDCG.
+Published references: BM25 0.665, `bge-small-en-v1.5` 0.713. Raw results: [`benchmarks/beir_scifact.json`](benchmarks/beir_scifact.json).
+
+Reproduce: `pip install -e ".[bench]"`, then `rag bench --dataset scifact`. Any BEIR dataset name works, e.g. `nfcorpus` or `fiqa`.
 
 ---
 
