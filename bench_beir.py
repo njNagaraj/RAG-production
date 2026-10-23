@@ -1,7 +1,7 @@
 """
 Reproducible retrieval benchmark on a BEIR dataset (default: SciFact, 5,183
 abstracts, 300 test queries). Runs the real pipeline on this machine:
-Chunker -> local embedder -> Postgres (dense + FTS) -> RRF -> cross-encoder.
+Chunker -> local embedder -> Postgres (dense + FTS) -> fusion -> cross-encoder.
 
 Usage: rag bench --dataset scifact [--limit 100] [--no-rerank]
 Needs: pip install -e ".[bench]" (pyarrow), Postgres, and the local models.
@@ -151,7 +151,7 @@ def run_benchmark(dataset: str = "scifact", limit: int = 0, rerank: bool = True)
     methods: List[Tuple[str, Callable[[str], List[Dict[str, Any]]]]] = [
         ("Postgres full-text search", lexical),
         (f"Dense ({settings.local_embedding_model})", dense),
-        ("Hybrid (dense + FTS, RRF)", hybrid),
+        (f"Hybrid (dense + FTS, {settings.fusion_method})", hybrid),
     ]
     if reranker:
         methods.append((f"Hybrid + rerank ({settings.local_reranker_model})", hybrid_rerank))

@@ -64,6 +64,9 @@ class Settings(BaseSettings):
     # Retrieval (IG pattern: retrieve top-20 per method, fuse, rerank all, keep 5)
     top_k_retrieval: int = 20
     top_k_reranked: int = 5
+    # Fusion of dense + full-text hits: convex (min-max score mix) | rrf
+    fusion_method: str = "convex"
+    fusion_dense_weight: float = 0.7
     rrf_constant: int = 60
     hnsw_ef_search: int = 80
     # Permission-scoped dense search. HNSW filters AFTER the graph walk, so a

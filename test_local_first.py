@@ -91,3 +91,15 @@ def test_library_telemetry_off_by_default():
     import pipeline  # noqa: F401
     assert os.environ["ORT_DISABLE_TELEMETRY"] == "1"
     assert os.environ["HF_HUB_DISABLE_TELEMETRY"] == "1"
+
+def test_convex_fusion_keeps_confident_dense_hit():
+    from pipeline.retriever import convex_fusion, reciprocal_rank_fusion
+    # Dense is sure about "a"; the lexical leg barely separates b and c
+    dense = [{"id": "a", "score": 0.90}, {"id": "b", "score": 0.50}, {"id": "c", "score": 0.10}]
+    lexical = [{"id": "b", "score": 0.21}, {"id": "c", "score": 0.20}, {"id": "a", "score": 0.01}]
+    # RRF sees ranks only: b is 2nd + 1st and beats a (1st + 3rd)
+    assert reciprocal_rank_fusion(dense, lexical)[0]["id"] == "b"
+    assert convex_fusion(dense, lexical, dense_weight=0.7)[0]["id"] == "a"
+    fused = convex_fusion(dense, [], dense_weight=0.7)
+    assert [r["id"] for r in fused] == ["a", "b", "c"]
+    assert fused[0]["fusion_score"] == 0.7
