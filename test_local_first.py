@@ -85,3 +85,9 @@ def test_locality_report(monkeypatch):
     monkeypatch.setattr(settings, "openai_base_url", "http://localhost:8001/v1")
     rows = dict((stage, local) for stage, _, local in locality_report("OpenAIGenerator"))
     assert rows["Generation"] is True
+
+def test_library_telemetry_off_by_default():
+    import os
+    import pipeline  # noqa: F401
+    assert os.environ["ORT_DISABLE_TELEMETRY"] == "1"
+    assert os.environ["HF_HUB_DISABLE_TELEMETRY"] == "1"

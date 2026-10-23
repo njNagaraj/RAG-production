@@ -87,6 +87,9 @@ def locality_report(generator_name: str) -> List[Tuple[str, str, bool]]:
         host = os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
         rows.append(("Tracing (Langfuse)", host, _is_local_url(host)))
 
+    if os.getenv("ORT_DISABLE_TELEMETRY") != "1":
+        rows.append(("Telemetry (onnxruntime)", "mobile.events.data.microsoft.com", False))
+
     if os.getenv("HF_HUB_OFFLINE") not in ("1", "true", "True"):
         rows.append(("Model downloads", "Hugging Face Hub on cache miss", False))
     return rows

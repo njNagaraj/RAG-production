@@ -176,6 +176,7 @@ rag doctor                      # section [4] lists any stage that can leave the
 ```
 
 The Docker image bakes all models at build time and sets `HF_HUB_OFFLINE=1`.
+Library telemetry is off by default: onnxruntime 1.29 otherwise reports each model load to Microsoft.
 
 ---
 

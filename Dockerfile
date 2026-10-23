@@ -15,7 +15,10 @@ COPY --from=builder /install /usr/local
 # and run in egress-restricted networks.
 # HF_HOME is set before the build step so the tokenizer and Docling models
 # land in /app/models too (the runtime user cannot read /root/.cache).
-ENV FASTEMBED_CACHE_PATH=/app/models \
+ENV ORT_DISABLE_TELEMETRY=1 \
+    HF_HUB_DISABLE_TELEMETRY=1 \
+    DO_NOT_TRACK=1 \
+    FASTEMBED_CACHE_PATH=/app/models \
     MODEL_CACHE_DIR=/app/models \
     HF_HOME=/app/models/hf \
     DOCLING_ARTIFACTS_PATH=/app/models/docling
