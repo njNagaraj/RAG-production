@@ -80,3 +80,11 @@ def test_document_move_updates_chunk_unit(corpus):
         cur.execute("SELECT DISTINCT unit_id FROM document_chunks WHERE document_id = %s;", (corpus["team_doc"],))
         assert [r["unit_id"] for r in cur.fetchall()] == [corpus["dept"]]
         conn.rollback()
+
+def test_lexical_search_matches_any_term(corpus):
+    # "zebra" appears nowhere; an all-terms match would return nothing
+    rows = corpus["store"].lexical_search("team chunk zebra", TOP_K, corpus["org_id"],
+                                          visible_node_ids=[corpus["team"]])
+    assert len(rows) == TOP_K
+    assert corpus["store"].lexical_search('"team zebra"', TOP_K, corpus["org_id"],
+                                          visible_node_ids=[corpus["team"]]) == []

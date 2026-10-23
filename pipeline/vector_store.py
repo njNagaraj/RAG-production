@@ -767,12 +767,24 @@ class PostgresVectorStore(BaseVectorStore):
     def lexical_search(self, query_text: str, top_k: int, org_id: int,
                        visible_node_ids: Optional[List[int]] = None,
                        metadata_filter: Dict[str, Any] = None) -> List[Dict[str, Any]]:
+        """
+        Postgres full-text leg. A quoted query keeps websearch semantics (every
+        term and phrase must match). Any other query ORs its terms and ranks
+        by ts_rank normalized for document length: requiring every word of a
+        natural-language question matched almost nothing (BEIR SciFact
+        nDCG@10 0.072 with AND, 0.606 with OR).
+        """
         self.connect()
         if not query_text.strip():
             return []
 
-        params: list = [query_text, query_text]
-        where_clauses = ["dc.content_tsvector @@ websearch_to_tsquery('english', %s)"]
+        if '"' in query_text:
+            tsquery = "websearch_to_tsquery('english', %s)"
+        else:
+            tsquery = "replace(plainto_tsquery('english', %s)::text, ' & ', ' | ')::tsquery"
+
+        params: list = [query_text]
+        where_clauses = ["dc.content_tsvector @@ q.query"]
         where_clauses += self._filter_sql(org_id, visible_node_ids, metadata_filter, params)
         where_sql = "WHERE " + " AND ".join(where_clauses)
         params.append(top_k)
@@ -786,8 +798,9 @@ class PostgresVectorStore(BaseVectorStore):
                 dc.content AS child_content,
                 dc.context,
                 d.source as source_doc,
-                ts_rank_cd(dc.content_tsvector, websearch_to_tsquery('english', %s)) AS score
-            FROM document_chunks dc
+                ts_rank(dc.content_tsvector, q.query, 1) AS score
+            FROM (SELECT {tsquery} AS query) q
+            CROSS JOIN document_chunks dc
             JOIN documents d ON dc.document_id = d.id
             {where_sql}
             ORDER BY score DESC
