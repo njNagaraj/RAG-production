@@ -292,6 +292,12 @@ def main():
     p_eval.add_argument("--skip-generation", action="store_true", help="Run retrieval-only evaluation without generating answers")
     p_eval.add_argument("--org", default="default", help="Organization slug to evaluate (default: 'default')")
 
+    # bench
+    p_bench = subparsers.add_parser("bench", help="Retrieval quality benchmark on a BEIR dataset (nDCG@10, Recall@10, MRR@10)")
+    p_bench.add_argument("--dataset", default="scifact", help="BEIR dataset name on Hugging Face (default: scifact)")
+    p_bench.add_argument("--limit", type=int, default=0, help="Only the first N test queries (0 = all)")
+    p_bench.add_argument("--no-rerank", action="store_true", help="Skip the cross-encoder row")
+
     # models
     p_models = subparsers.add_parser("models", help="Download local models for offline use")
     p_models.add_argument("action", choices=["pull"], help="pull: fetch embedder, reranker, tokenizer, Docling models")
@@ -315,6 +321,9 @@ def main():
         handle_benchmark()
     elif args.command == "eval":
         handle_eval(args.skip_generation, args.org)
+    elif args.command == "bench":
+        from bench_beir import run_benchmark
+        run_benchmark(args.dataset, args.limit, rerank=not args.no_rerank)
     elif args.command == "models":
         handle_models(args.skip_docling)
     elif args.command == "serve":
