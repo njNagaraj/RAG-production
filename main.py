@@ -245,10 +245,11 @@ def handle_benchmark():
     avg_lat = sum(latencies) / len(latencies)
     print(f"\n[+] Benchmark Complete: Average Hybrid+Rerank Latency = {avg_lat:.1f}ms\n")
 
-def handle_eval(skip_generation: bool = False):
+def handle_eval(skip_generation: bool = False, org_slug: str = "default"):
     """Run automated golden dataset continuous evaluation."""
     from eval_suite import run_evaluation_suite
-    run_evaluation_suite(skip_generation=skip_generation)
+    if not run_evaluation_suite(skip_generation=skip_generation, org_slug=org_slug):
+        sys.exit(1)
 
 def handle_models(skip_docling: bool = False):
     from pipeline.models import pull_models
@@ -289,6 +290,7 @@ def main():
     # eval
     p_eval = subparsers.add_parser("eval", help="Run automated golden dataset evaluation (Recall@K, MRR, Faithfulness)")
     p_eval.add_argument("--skip-generation", action="store_true", help="Run retrieval-only evaluation without generating answers")
+    p_eval.add_argument("--org", default="default", help="Organization slug to evaluate (default: 'default')")
 
     # models
     p_models = subparsers.add_parser("models", help="Download local models for offline use")
@@ -312,7 +314,7 @@ def main():
     elif args.command == "benchmark":
         handle_benchmark()
     elif args.command == "eval":
-        handle_eval(args.skip_generation)
+        handle_eval(args.skip_generation, args.org)
     elif args.command == "models":
         handle_models(args.skip_docling)
     elif args.command == "serve":

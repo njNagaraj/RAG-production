@@ -21,7 +21,7 @@ def _target_rank(chunks, target: str):
             return i + 1
     return None
 
-def run_evaluation_suite(skip_generation: bool = False):
+def run_evaluation_suite(skip_generation: bool = False, org_slug: str = "default"):
     print("=" * 70)
     print("      PRODUCTION RAG: AUTOMATED CONTINUOUS EVALUATION SUITE")
     print("=" * 70)
@@ -44,6 +44,17 @@ def run_evaluation_suite(skip_generation: bool = False):
         print(f"[!] Database connection error: {e}")
         print("[!] Retrieval metrics require the database. Aborting.")
         return False
+
+    # Retrieval is tenant-scoped: without an org_id the SQL filter matches nothing.
+    # Org-wide scope (visible_node_ids=None) = what the org owner sees.
+    if org_slug == "default":
+        org_id = store.ensure_default_org()["org_id"]
+    else:
+        org_id = next((o["id"] for o in store.list_organizations() if o["slug"] == org_slug), None)
+        if org_id is None:
+            print(f"[!] Organization '{org_slug}' not found.")
+            return False
+    print(f"[+] Evaluating against org '{org_slug}' (id={org_id}).")
 
     retriever = Retriever(store, embedder)
     reranker = get_reranker()
@@ -77,7 +88,7 @@ def run_evaluation_suite(skip_generation: bool = False):
 
         t0 = time.time()
         try:
-            chunks, debug = retriever.retrieve(q, history=[])
+            chunks, debug = retriever.retrieve(q, history=[], org_id=org_id)
         except Exception as e:
             print(f"      [!] Retrieval failed: {e}")
             reciprocal_ranks.append(0.0)
