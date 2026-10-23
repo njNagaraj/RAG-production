@@ -74,7 +74,7 @@ Most RAG tutorials break down the moment they hit production. Generic frameworks
 |---|:---:|:---:|:---:|
 | **Zero-Touch 100% Offline Mode** | ✅ Yes (Auto-probes Local Ollama) | ⚠️ Complex setup | ⚠️ Heavyweight |
 | **Real-Time Token Streaming (SSE)** | ✅ Native Server-Sent Events | ⚠️ Framework dependent | ⚠️ Heavyweight |
-| **Hybrid Search (Dense + BM25 RRF)** | ✅ Built-in native SQL | ⚠️ Requires external plugins | ⚠️ Resource heavy |
+| **Hybrid Search (Dense + Full-Text Fusion)** | ✅ Built-in native SQL | ⚠️ Requires external plugins | ⚠️ Resource heavy |
 | **CPU-Optimized Reranking** | ✅ Built-in Cross-Encoder | ❌ External API calls | ⚠️ Partial |
 | **Hierarchical Multi-Tenancy** | ✅ Org → Dept → Team → User | ❌ None | ⚠️ Basic Org only |
 | **Semantic Response Cache** | ✅ Built-in (Role-Isolated) | ❌ DIY | ❌ No RBAC bounds |
@@ -103,7 +103,7 @@ flowchart TD
     subgraph Retrieval ["2. Local Hybrid Retrieval Tier"]
         Transform --> Dense[pgvector HNSW Dense Search]
         Transform --> Sparse[PostgreSQL Full-Text Search BM25]
-        Dense & Sparse --> RRF[Weighted Reciprocal Rank Fusion]
+        Dense & Sparse --> RRF[Convex Score Fusion]
     end
 
     subgraph Reranking ["3. Precision Reranking Tier"]
@@ -214,18 +214,20 @@ rag serve --port 8000 --reload
 
 ## 📊 Benchmarks
 
-Measured with `rag bench --dataset scifact` on BEIR SciFact: 5,183 abstracts, 300 test queries, 4 CPU threads, no GPU.
-Every row runs the real pipeline: Chunker, local embedder, Postgres, RRF, local cross-encoder.
+Measured with `rag bench` on two BEIR datasets, 4 CPU threads, no GPU.
+Every row runs the real pipeline: Chunker, local embedder, Postgres, fusion, local cross-encoder.
 
-| Method | nDCG@10 | Recall@10 | MRR@10 | p50 | p95 |
-|---|---|---|---|---|---|
-| Postgres full-text search | 0.606 | 0.723 | 0.578 | 58 ms | 138 ms |
-| Dense (`bge-small-en-v1.5`) | 0.702 | 0.833 | 0.669 | 107 ms | 139 ms |
-| Hybrid (dense + FTS, RRF) | 0.694 | 0.827 | 0.660 | 180 ms | 291 ms |
-| Hybrid + rerank (`ms-marco-MiniLM-L-6-v2`) | 0.687 | 0.821 | 0.652 | 2558 ms | 3061 ms |
+| Method | SciFact nDCG@10 | NFCorpus nDCG@10 | p50 latency (SciFact) |
+|---|---|---|---|
+| Postgres full-text search | 0.606 | 0.300 | 56 ms |
+| Dense (`bge-small-en-v1.5`) | 0.702 | 0.348 | 106 ms |
+| **Hybrid (dense + FTS, convex fusion)** | **0.724** | **0.356** | **176 ms** |
+| Hybrid + rerank (`ms-marco-MiniLM-L-6-v2`) | 0.687 | 0.349 | 2411 ms |
 
-On SciFact, dense alone scores highest. Equal-weight RRF and the MS MARCO reranker each cost about 0.01 nDCG.
-Published references: BM25 0.665, `bge-small-en-v1.5` 0.713. Raw results: [`benchmarks/beir_scifact.json`](benchmarks/beir_scifact.json).
+SciFact: 5,183 abstracts, 300 queries. NFCorpus: 3,633 documents, 323 queries.
+Published references for SciFact: BM25 0.665, `bge-small-en-v1.5` 0.713.
+The MS MARCO reranker lowers nDCG on both datasets and adds about 2.3 s per query on CPU.
+`RERANKER_PROVIDER=none` skips it. Raw results: [`benchmarks/`](benchmarks/).
 
 Reproduce: `pip install -e ".[bench]"`, then `rag bench --dataset scifact`. Any BEIR dataset name works, e.g. `nfcorpus` or `fiqa`.
 
