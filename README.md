@@ -9,7 +9,7 @@
 [![Python Version](https://img.shields.io/badge/Python-3.10%20%7C%203.11%20%7C%203.12-brightgreen.svg)](https://www.python.org/)
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?logo=docker&logoColor=white)](docker-compose.yml)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
-[![Status](https://img.shields.io/badge/Status-Production%20Ready-success.svg)](#)
+[![Status](https://img.shields.io/badge/Status-Beta-yellow.svg)](#-benchmarks)
 
 <p align="center">
   <a href="#-quickstart-in-60-seconds">Quickstart</a> •
@@ -70,18 +70,15 @@ rag eval
 
 Most RAG tutorials break down the moment they hit production. Generic frameworks are bloated, slow, hard to self-host, and lack tenant isolation. **Production RAG** was built from day one for real-world enterprise deployment:
 
-| Feature | ⚡ **Production RAG** | LangChain / LlamaIndex | Dify / RAGFlow |
-|---|:---:|:---:|:---:|
-| **Zero-Touch 100% Offline Mode** | ✅ Yes (Auto-probes Local Ollama) | ⚠️ Complex setup | ⚠️ Heavyweight |
-| **Real-Time Token Streaming (SSE)** | ✅ Native Server-Sent Events | ⚠️ Framework dependent | ⚠️ Heavyweight |
-| **Hybrid Search (Dense + Full-Text Fusion)** | ✅ Built-in native SQL | ⚠️ Requires external plugins | ⚠️ Resource heavy |
-| **CPU-Optimized Reranking** | ✅ Built-in Cross-Encoder | ❌ External API calls | ⚠️ Partial |
-| **Hierarchical Multi-Tenancy** | ✅ Org → Dept → Team → User | ❌ None | ⚠️ Basic Org only |
-| **Semantic Response Cache** | ✅ Built-in (Role-Isolated) | ❌ DIY | ❌ No RBAC bounds |
-| **Built-in Faithfulness Guardrail**| ✅ Self-auditing evaluator | ❌ Requires 3rd-party SaaS | ❌ No |
-| **Continuous Evaluation Harness** | ✅ Built-in (`rag eval`) | ❌ Requires external tool | ❌ No |
-| **Memory Footprint** | ⚡ **< 500MB RAM** | ⚠️ Heavy (> 2GB) | ⚠️ Very Heavy (> 4GB) |
-| **Startup Latency** | ⚡ **< 2 seconds** | ⚠️ 10-20s | ⚠️ 1-2 minutes |
+What ships in the box:
+
+- **Offline by default**: generation auto-detects local Ollama; embeddings, fusion and faithfulness checks run on CPU. `rag doctor` lists any stage that can leave the host.
+- **Hybrid search in Postgres**: pgvector dense search plus full-text search, merged by convex score fusion. See [Benchmarks](#-benchmarks).
+- **Permission filter before ranking**: org, department and team scope sit in the SQL `WHERE` clause of both search legs.
+- **Semantic cache scoped per permission set**: one team never receives a cached answer built from another team's documents.
+- **Faithfulness check**: a local cross-encoder scores each answer sentence against the retrieved chunks.
+- **Token streaming** over Server-Sent Events.
+- **Evaluation built in**: `rag eval` on your own golden set, `rag bench` on public BEIR datasets.
 
 ---
 
@@ -107,7 +104,7 @@ flowchart TD
     end
 
     subgraph Reranking ["3. Precision Reranking Tier"]
-        RRF --> Rerank[Cross-Encoder ONNX MS-MARCO]
+        RRF --> Rerank[Optional Cross-Encoder Rerank, off by default]
         Rerank --> TopK[Top-K High Relevance Chunks]
     end
 
@@ -182,7 +179,7 @@ Library telemetry is off by default: onnxruntime 1.29 otherwise reports each mod
 
 ## 🛠️ CLI Tooling (`rag`)
 
-Production RAG ships with a battle-tested developer CLI:
+Production RAG ships with a developer CLI:
 
 ```bash
 # Ingest single file or recursive directory

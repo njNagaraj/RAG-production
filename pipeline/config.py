@@ -34,8 +34,11 @@ class Settings(BaseSettings):
     generation_provider: str = "auto"
     # embedding: local (fastembed ONNX) | gemini | openai | ollama
     embedding_provider: str = "local"
-    # reranker: local (cross-encoder ONNX) | cohere | none
-    reranker_provider: str = "local"
+    # reranker: none | local (cross-encoder ONNX) | cohere
+    # Default none: the local MS MARCO cross-encoder lowered nDCG@10 on BEIR
+    # SciFact (0.724 -> 0.687) and NFCorpus (0.356 -> 0.349) and added ~2.3 s
+    # per query on 4 CPU threads. Measure on your corpus with `rag bench`.
+    reranker_provider: str = "none"
     # evaluator: local (cross-encoder support scoring) | none
     evaluator_provider: str = "local"
 
