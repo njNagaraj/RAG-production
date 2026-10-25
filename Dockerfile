@@ -2,7 +2,10 @@ FROM python:3.11-slim AS builder
 
 WORKDIR /app
 COPY requirements.txt .
-RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
+# CPU-only torch (pulled in by Docling): the PyPI default bundles 3.2 GB of
+# CUDA libraries this CPU engine never loads. +cpu wheels sort higher.
+RUN pip install --no-cache-dir --prefix=/install \
+    --extra-index-url https://download.pytorch.org/whl/cpu -r requirements.txt
 
 FROM python:3.11-slim
 
@@ -28,7 +31,8 @@ COPY pipeline/__init__.py pipeline/config.py pipeline/models.py pipeline/
 # fastembed models are required. Docling models are best effort: some come
 # from www.modelscope.cn, and without them PDF parsing falls back to pypdf.
 RUN python -c "from pipeline.models import pull_models; s = pull_models(); print(s); \
-    import sys; sys.exit(any(v != 'ok' for k, v in s.items() if not k.startswith('docling')))"
+    import sys; sys.exit(any(v != 'ok' for k, v in s.items() if not k.startswith('docling')))" \
+ && chmod -R a+rX /app/models
 
 # Every model is now in the image: block runtime downloads. A different
 # LOCAL_EMBEDDING_MODEL in .env needs HF_HUB_OFFLINE=0 (or a rebuild).
