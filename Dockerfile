@@ -39,7 +39,9 @@ COPY migrations/ migrations/
 COPY static/ static/
 COPY app.py worker.py main.py ./
 
-RUN mkdir -p /app/uploads && chown -R raguser:raguser /app
+# Only uploads must be writable. A recursive chown of /app would copy the
+# 1.5 GB of read-only models into one more image layer.
+RUN mkdir -p /app/uploads && chown raguser:raguser /app/uploads
 USER raguser
 
 EXPOSE 8000
