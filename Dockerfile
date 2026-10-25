@@ -25,8 +25,10 @@ ENV ORT_DISABLE_TELEMETRY=1 \
 
 # Only the files the pull needs, so code edits keep this layer cached
 COPY pipeline/__init__.py pipeline/config.py pipeline/models.py pipeline/
+# fastembed models are required. Docling models are best effort: some come
+# from www.modelscope.cn, and without them PDF parsing falls back to pypdf.
 RUN python -c "from pipeline.models import pull_models; s = pull_models(); print(s); \
-    import sys; sys.exit(any(v != 'ok' for v in s.values()))"
+    import sys; sys.exit(any(v != 'ok' for k, v in s.items() if not k.startswith('docling')))"
 
 # Every model is now in the image: block runtime downloads. A different
 # LOCAL_EMBEDDING_MODEL in .env needs HF_HUB_OFFLINE=0 (or a rebuild).

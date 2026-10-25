@@ -682,21 +682,23 @@ def _run_query_stream(req: QueryRequest, user: CurrentUser, background_tasks: Ba
     except Exception as cache_err:
         write_step.finish({"success": False, "error": str(cache_err)})
 
-    yield f"data: {json.dumps({
-        'type': 'done',
-        'citations': active_citations,
-        'trace': tracer.to_dict(),
-        'debug': _debug_block(
-            debug_info['standalone_query'],
-            debug_info['expanded_queries'],
-            query_type=debug_info['query_type'],
-            dense_count=debug_info['dense_count'],
-            lexical_count=debug_info['lexical_count'],
-            retrieved_count=debug_info['fused_count'],
+    # Built outside the f-string: multi-line f-string expressions need Python 3.12+
+    done_event = {
+        "type": "done",
+        "citations": active_citations,
+        "trace": tracer.to_dict(),
+        "debug": _debug_block(
+            debug_info["standalone_query"],
+            debug_info["expanded_queries"],
+            query_type=debug_info["query_type"],
+            dense_count=debug_info["dense_count"],
+            lexical_count=debug_info["lexical_count"],
+            retrieved_count=debug_info["fused_count"],
             reranked_count=len(reranked_chunks),
-            metadata_filter=debug_info['metadata_filter'],
-        )
-    })}\n\n"
+            metadata_filter=debug_info["metadata_filter"],
+        ),
+    }
+    yield f"data: {json.dumps(done_event)}\n\n"
 
 @app.post("/api/query/stream")
 @limiter.limit(settings.rate_limit_query)
